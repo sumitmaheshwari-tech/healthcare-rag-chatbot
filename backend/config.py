@@ -13,16 +13,16 @@ class Settings:
     """Central configuration for the healthcare RAG chatbot."""
 
     # Provider setting: 'groq', 'ollama', 'openrouter', or 'gemini'
-    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "groq").lower()
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "openrouter").lower()
 
     # Google Gemini API (for LLM and Embeddings — free tier)
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "AQ.Ab8RN6IIyFKeRnXQGSCxZY49wknN0DpOXqtfDzzTMDJqexHqHg")
     LLM_MODEL: str = os.getenv("LLM_MODEL", "gemini-3.5-flash")
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "gemini-embedding-2")
 
-    # OpenRouter API (Cloud GPUs)
+    # OpenRouter API (NVIDIA Nemotron Nano 12B / Cloud GPUs)
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "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")
-    OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
+    OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-nano-12b-v2-vl:free")
 
     # Groq API (Cloud)
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "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")
