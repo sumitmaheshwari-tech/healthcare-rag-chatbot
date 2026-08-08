@@ -46,7 +46,7 @@ def flatten_tool_calls(messages):
     """
     Convert ToolMessages and tool-calling AIMessages into plain text messages.
     This eliminates API-specific tool call IDs and constraints, guaranteeing
-    cross-compatibility when falling over from one LLM provider to another.
+    cross-compatibility and strict role alternation for Gemini/OpenAI failover.
     """
     flat = []
     for msg in messages:
@@ -56,12 +56,21 @@ def flatten_tool_calls(messages):
             flat.append(msg)
         elif isinstance(msg, AIMessage):
             if hasattr(msg, "tool_calls") and msg.tool_calls:
-                flat.append(AIMessage(content="Checking the hospital records database..."))
+                text_content = msg.content if isinstance(msg.content, str) and msg.content else "Checking hospital records..."
+                flat.append(AIMessage(content=text_content))
             else:
                 flat.append(msg)
         elif isinstance(msg, ToolMessage):
-            flat.append(AIMessage(content=f"[Retrieved Hospital Database Fact]\n{msg.content}"))
-    return flat
+            flat.append(HumanMessage(content=f"[Retrieved Hospital Database Fact]\n{msg.content}"))
+
+    # Clean up and merge consecutive messages of the same role for strict API compliance
+    cleaned = []
+    for m in flat:
+        if cleaned and type(cleaned[-1]) == type(m) and not isinstance(m, SystemMessage):
+            cleaned[-1] = type(m)(content=str(cleaned[-1].content) + "\n" + str(m.content))
+        else:
+            cleaned.append(m)
+    return cleaned
 
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
