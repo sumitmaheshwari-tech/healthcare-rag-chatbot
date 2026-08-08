@@ -67,15 +67,25 @@ def build_graph():
             }
         )
     elif settings.LLM_PROVIDER == "ollama":
-        from langchain_ollama import ChatOllama
-        print(f"[AGENT] Initializing local Ollama model: {settings.OLLAMA_MODEL} at {settings.OLLAMA_BASE_URL} …")
-        llm = ChatOllama(
-            model=settings.OLLAMA_MODEL,
-            base_url=settings.OLLAMA_BASE_URL,
-            temperature=0,
-            num_ctx=4096,
-            num_predict=1024,
-        )
+        try:
+            from langchain_ollama import ChatOllama
+            print(f"[AGENT] Initializing local Ollama model: {settings.OLLAMA_MODEL} at {settings.OLLAMA_BASE_URL} …")
+            llm = ChatOllama(
+                model=settings.OLLAMA_MODEL,
+                base_url=settings.OLLAMA_BASE_URL,
+                temperature=0,
+                num_ctx=4096,
+                num_predict=1024,
+            )
+        except Exception as e:
+            print(f"[AGENT] Ollama unavailable ({e}). Falling back to Groq...")
+            from langchain_groq import ChatGroq
+            llm = ChatGroq(
+                model=settings.GROQ_LLM_MODEL,
+                groq_api_key=settings.GROQ_API_KEY,
+                temperature=0,
+                request_timeout=15.0,
+            )
     else:
         from langchain_groq import ChatGroq
         print(f"[AGENT] Initializing Groq model: {settings.GROQ_LLM_MODEL} …")
