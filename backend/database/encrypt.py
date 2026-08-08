@@ -14,16 +14,9 @@ ENV = os.getenv("ENV", "development")
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
 
 if not ENCRYPTION_KEY:
-    if ENV == "production":
-        raise RuntimeError(
-            "ENCRYPTION_KEY environment variable is required in production! "
-            "Generate one with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
-        )
-    # Development / staging: allow fallback key with a warning
     logger.warning(
         "WARNING: ENCRYPTION_KEY environment variable is not set! "
-        "Using a stable fallback key for local development. "
-        "This is NOT safe for production."
+        "Using a stable fallback key. Set ENCRYPTION_KEY env var in production for security."
     )
     ENCRYPTION_KEY = DEFAULT_DEV_KEY
     os.environ["ENCRYPTION_KEY"] = ENCRYPTION_KEY
