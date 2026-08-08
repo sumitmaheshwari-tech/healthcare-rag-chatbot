@@ -328,12 +328,15 @@ async def chat(request: ChatRequest, req_raw: Request, response: Response):
                         run_text_buffer = []
                     else:
                         # Final answer — flush buffered text to the client
-                        for txt in run_text_buffer:
+                        final_text = "".join(run_text_buffer)
+                        if not final_text and output and hasattr(output, "content") and output.content:
+                            final_text = output.content if isinstance(output.content, str) else str(output.content)
+                        if final_text:
                             if t_first_token is None:
                                 t_first_token = time.perf_counter()
                                 ttft_ms = (t_first_token - t_request_start) * 1000
                                 print(f"[PERF] TTFT (time to first token): {ttft_ms:.0f}ms")
-                            yield f"data: {json.dumps({'type': 'content', 'text': txt})}\n\n"
+                            yield f"data: {json.dumps({'type': 'content', 'text': final_text})}\n\n"
                         run_text_buffer = []
 
                 elif evt_name == "on_tool_end":
