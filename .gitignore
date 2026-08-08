@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Environment variables (NEVER commit API keys!)
+.env
+
+# Database (regenerated on startup)
+*.db
+hospital.db
+
+# ChromaDB (regenerated on startup)
+chroma_db/
+chroma_db_*/
+backend/chroma_db*/
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Byte-compiled
+*.pyc
