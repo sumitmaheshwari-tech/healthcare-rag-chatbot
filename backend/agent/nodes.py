@@ -240,7 +240,7 @@ async def agent_node(state, config, primary_llm, tools):
     trimmed_messages = [SystemMessage(content=full_system_prompt)] + trimmed_messages
 
     # ── Multi-Provider Failover Gateway ───────────────────────────────
-    providers_to_try = [settings.LLM_PROVIDER, "gemini", "openrouter"]
+    providers_to_try = [settings.LLM_PROVIDER, "groq", "gemini", "openrouter"]
     
     # Remove duplicates while keeping order
     seen = set()

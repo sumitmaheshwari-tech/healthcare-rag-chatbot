@@ -31,15 +31,20 @@ def _generate_slots(start: str, end: str, duration: int) -> list[str]:
 
 
 @tool
-def check_doctor_availability(doctor_name: str, date_str: str) -> str:
+def check_doctor_availability(doctor_name: str, date: str = "", date_str: str = "") -> str:
     """Check available appointment slots for a specific doctor on a given date.
 
     Args:
         doctor_name: Full or partial name of the doctor (e.g. 'Dr. Ananya Reddy' or 'Ananya').
-        date_str: The date to check in YYYY-MM-DD format (e.g. '2026-07-15').
+        date: The date to check in YYYY-MM-DD format (e.g. '2026-08-10').
+        date_str: The date to check in YYYY-MM-DD format (e.g. '2026-08-10').
     """
     db = get_db()
     try:
+        target_date_raw = date or date_str
+        if not target_date_raw:
+            return "Please provide a date in YYYY-MM-DD format (e.g. 2026-08-10)."
+
         # Find doctor
         doctor = (
             db.query(Doctor)
@@ -51,11 +56,11 @@ def check_doctor_availability(doctor_name: str, date_str: str) -> str:
 
         # Parse date
         try:
-            target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            target_date = datetime.strptime(target_date_raw, "%Y-%m-%d").date()
         except ValueError:
             return "Invalid date format. Please use YYYY-MM-DD (e.g. 2026-07-15)."
 
-        if target_date < date.today():
+        if target_date < datetime.now().date():
             return "That date is in the past. Please choose a future date."
 
         # Check hospital holiday
@@ -158,9 +163,11 @@ def check_doctor_availability(doctor_name: str, date_str: str) -> str:
 def book_appointment(
     patient_id: str,
     doctor_name: str,
-    date_str: str,
-    time_str: str,
     state: Annotated[dict, InjectedState],
+    date: str = "",
+    date_str: str = "",
+    time: str = "",
+    time_str: str = "",
     reason: str = "General Consultation",
 ) -> str:
     """Book an appointment for a patient with a specific doctor.
@@ -168,10 +175,17 @@ def book_appointment(
     Args:
         patient_id: The patient's string UID.
         doctor_name: Full or partial name of the doctor.
+        date: Appointment date in YYYY-MM-DD format.
         date_str: Appointment date in YYYY-MM-DD format.
+        time: Appointment time in HH:MM format (e.g. 10:00 AM or 10:00).
         time_str: Appointment time in HH:MM format.
         reason: Reason for the visit (default: 'General Consultation').
     """
+    target_date_raw = date or date_str
+    target_time_raw = time or time_str
+    if not target_date_raw or not target_time_raw:
+        return "Please provide both a date (YYYY-MM-DD) and a time slot (e.g. 10:00 AM) to complete the booking."
+
     # Enforce BOLA authorization check
     auth_uid = state.get("authenticated_patient_uid") if state else None
     if not auth_uid or auth_uid != patient_id:
@@ -192,11 +206,11 @@ def book_appointment(
             return f"Doctor '{doctor_name}' not found."
 
         try:
-            target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            target_date = datetime.strptime(target_date_raw, "%Y-%m-%d").date()
         except ValueError:
             return "Invalid date format. Please use YYYY-MM-DD."
 
-        if target_date < date.today():
+        if target_date < datetime.now().date():
             return "Cannot book an appointment in the past."
 
         # Check hospital holiday

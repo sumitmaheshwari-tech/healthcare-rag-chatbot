@@ -429,9 +429,23 @@ function setupEventListeners() {
         }
     });
 
+    let prewarmTimer = null;
     messageInput.addEventListener('input', () => {
         autoResize();
         updateSendButton();
+
+        // Proactive typing pre-warm heuristic (<300ms debounce)
+        clearTimeout(prewarmTimer);
+        const text = messageInput.value.trim();
+        if (text.length >= 5) {
+            prewarmTimer = setTimeout(() => {
+                fetch(`${API_BASE}/api/chat/prewarm`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: text })
+                }).catch(() => {});
+            }, 300);
+        }
     });
 
     quickActions.addEventListener('click', (e) => {

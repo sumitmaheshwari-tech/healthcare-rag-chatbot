@@ -122,3 +122,33 @@ retrieval_cache = RedisCache(host="127.0.0.1", port=6379, db=1, ttl_seconds=sett
 
 # Response cache: "patient_uid:query" -> LLM response (shortest TTL for freshness)
 response_cache = RedisCache(host="127.0.0.1", port=6379, db=2, ttl_seconds=settings.CACHE_RESPONSE_TTL)
+
+
+# ── Response Cache Helper Functions ────────────────────────────────
+import hashlib
+import re
+
+def _normalize_query(query: str) -> str:
+    """Normalize user query for semantic caching (lowercase, strip extra spaces/punctuation)."""
+    q = query.lower().strip()
+    q = re.sub(r'[^\w\s]', '', q)
+    return re.sub(r'\s+', ' ', q)
+
+def get_response_cache(query: str) -> str:
+    """Retrieve cached response if available for identical/similar queries."""
+    norm_q = _normalize_query(query)
+    if not norm_q or len(norm_q) < 3:
+        return None
+    key = f"resp:{hashlib.md5(norm_q.encode('utf-8')).hexdigest()}"
+    return response_cache.get(key)
+
+def set_response_cache(query: str, response_text: str):
+    """Store generated LLM response in cache."""
+    norm_q = _normalize_query(query)
+    if not norm_q or len(norm_q) < 3 or not response_text or len(response_text) < 10:
+        return
+    # Do not cache error responses or emergency warnings
+    if any(err_txt in response_text.lower() for err_txt in ["unavailable", "error", "emergency medical attention", "rephrasing"]):
+        return
+    key = f"resp:{hashlib.md5(norm_q.encode('utf-8')).hexdigest()}"
+    response_cache.set(key, response_text)

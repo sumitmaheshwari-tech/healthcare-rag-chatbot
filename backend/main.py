@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Depends, Form, Request, Response
+from fastapi import FastAPI, HTTPException, Depends, Form, Request, Response, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
@@ -267,7 +267,7 @@ async def chat(request: ChatRequest, req_raw: Request, response: Response):
     async def event_generator():
         config = {
             "configurable": {"thread_id": session_id},
-            "recursion_limit": 10
+            "recursion_limit": 25
         }
         user_message = request.message
         t_request_start = time.perf_counter()
@@ -276,6 +276,17 @@ async def chat(request: ChatRequest, req_raw: Request, response: Response):
         try:
             # Yield initial metadata
             yield f"data: {json.dumps({'type': 'session', 'session_id': session_id, 'patient_id': auth_uid or ''})}\n\n"
+
+            # ── 0. Semantic Cache Fast-Path (<10ms) ───────────────────
+            from knowledge.cache import get_response_cache, set_response_cache
+            cached_resp = get_response_cache(user_message)
+            if cached_resp:
+                t_first_token = time.perf_counter()
+                ttft_ms = (t_first_token - t_request_start) * 1000
+                print(f"[PERF CACHE] Instant Cache HIT ({ttft_ms:.1f}ms) for query: '{user_message}'")
+                yield f"data: {json.dumps({'type': 'content', 'text': cached_resp})}\n\n"
+                yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                return
 
             # ── Buffered streaming ────────────────────────────────────
             # ALWAYS buffer tokens per LLM run. On run-end, check if the
@@ -337,6 +348,10 @@ async def chat(request: ChatRequest, req_raw: Request, response: Response):
                                 ttft_ms = (t_first_token - t_request_start) * 1000
                                 print(f"[PERF] TTFT (time to first token): {ttft_ms:.0f}ms")
                             yield f"data: {json.dumps({'type': 'content', 'text': final_text})}\n\n"
+                            try:
+                                set_response_cache(user_message, final_text)
+                            except Exception as ce:
+                                print(f"[CACHE WARNING] Failed to cache response: {ce}")
                         run_text_buffer = []
 
                 elif evt_name == "on_tool_end":
@@ -741,6 +756,36 @@ async def health_check():
         health_status["status"] = "degraded"
 
     return health_status
+
+
+# ── Typing Pre-Warm Endpoint ─────────────────────────────────────────
+class PrewarmRequest(BaseModel):
+    text: str
+
+@app.post("/api/chat/prewarm")
+async def prewarm_chat(req: PrewarmRequest, background_tasks: BackgroundTasks):
+    """Pre-warm vector embeddings in the background as the user types."""
+    query = req.text.strip()
+    if not query or len(query) < 4:
+        return {"status": "ignored"}
+
+    def _do_prewarm():
+        try:
+            from agent.intent_classifier import classify_intent
+            intent = classify_intent(query)
+            if intent.get("intent") not in ["CHITCHAT", "DIRECT_ACTION"]:
+                from tools.rag_tool import _get_embeddings, embedding_cache
+                norm_key = f"emb:{query.lower().strip()}"
+                if not embedding_cache.get(norm_key):
+                    emb_model = _get_embeddings()
+                    vec = emb_model.embed_query(query)
+                    embedding_cache.set(norm_key, vec)
+                    print(f"[PREWARM] Pre-computed embedding vector for: '{query}'")
+        except Exception as e:
+            print(f"[PREWARM WARNING] Pre-warm failed silently: {e}")
+
+    background_tasks.add_task(_do_prewarm)
+    return {"status": "prewarming"}
 
 
 # ── Static files & frontend serving ──────────────────────────────────
