@@ -279,7 +279,7 @@ async def chat(request: ChatRequest, req_raw: Request, response: Response):
 
             # ── 0. Semantic Cache Fast-Path (<10ms) ───────────────────
             from knowledge.cache import get_response_cache, set_response_cache
-            cached_resp = get_response_cache(user_message)
+            cached_resp = get_response_cache(user_message, patient_uid=auth_uid or "guest")
             if cached_resp:
                 t_first_token = time.perf_counter()
                 ttft_ms = (t_first_token - t_request_start) * 1000
@@ -349,7 +349,7 @@ async def chat(request: ChatRequest, req_raw: Request, response: Response):
                                 print(f"[PERF] TTFT (time to first token): {ttft_ms:.0f}ms")
                             yield f"data: {json.dumps({'type': 'content', 'text': final_text})}\n\n"
                             try:
-                                set_response_cache(user_message, final_text)
+                                set_response_cache(user_message, final_text, patient_uid=auth_uid or "guest")
                             except Exception as ce:
                                 print(f"[CACHE WARNING] Failed to cache response: {ce}")
                         run_text_buffer = []
@@ -773,14 +773,19 @@ async def prewarm_chat(req: PrewarmRequest, background_tasks: BackgroundTasks):
         try:
             from agent.intent_classifier import classify_intent
             intent = classify_intent(query)
-            if intent.get("intent") not in ["CHITCHAT", "DIRECT_ACTION"]:
-                from tools.rag_tool import _get_embeddings, embedding_cache
-                norm_key = f"emb:{query.lower().strip()}"
+            # Only pre-warm embeddings for queries likely to hit RAG search
+            if intent.get("intent") not in ["CHITCHAT", "DIRECT_ACTION", "BOOKING_INTENT"]:
+                from knowledge.ingest import _get_embeddings
+                from knowledge.cache import embedding_cache
+                # Use the same key format as rag_tool.py: "{patient_uid}:{query}"
+                norm_key = f"guest:{query.strip()}"
                 if not embedding_cache.get(norm_key):
                     emb_model = _get_embeddings()
                     vec = emb_model.embed_query(query)
                     embedding_cache.set(norm_key, vec)
                     print(f"[PREWARM] Pre-computed embedding vector for: '{query}'")
+                else:
+                    print(f"[PREWARM] Embedding already cached for: '{query}'")
         except Exception as e:
             print(f"[PREWARM WARNING] Pre-warm failed silently: {e}")
 

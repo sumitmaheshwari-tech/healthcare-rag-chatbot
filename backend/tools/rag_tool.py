@@ -44,7 +44,10 @@ def reciprocal_rank_fusion(vector_docs, bm25_docs, k_rrf=60, top_n=5):
 
 
 @tool
-def search_hospital_knowledge(query: str, state: Annotated[dict, InjectedState]) -> str:
+def search_hospital_knowledge(
+    query: str,
+    state: Annotated[dict, InjectedState] = None
+) -> str:
     """Search the hospital's knowledge base for information about departments,
     doctors, treatments, insurance policies, hospital facilities, FAQs, and
     general hospital information.

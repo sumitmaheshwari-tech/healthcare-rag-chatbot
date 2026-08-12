@@ -11,7 +11,7 @@ from typing import Dict
 # ── Pre-compiled regex patterns (compiled once at import time) ────────────
 
 _CHITCHAT_PATTERN = re.compile(
-    r"^("
+    r"\b("
     r"h(i|ello|ey|owdy|ola)"
     r"|good\s*(morning|afternoon|evening|night|day)"
     r"|what'?s\s*up"
@@ -19,23 +19,13 @@ _CHITCHAT_PATTERN = re.compile(
     r"|yo\b"
     r"|how\s*are\s*you"
     r"|how'?s\s*it\s*going"
-    r"|thank(s|\s*you)"
+    r"|thank(s|\s*you)?"
     r"|bye|goodbye|see\s*you|take\s*care"
     r"|nice\s*to\s*meet"
     r"|pleased\s*to\s*meet"
-    r"|have\s*a\s*(good|nice|great)\s*(day|night|evening)"
-    r"|welcome"
     r"|ok(ay)?"
-    r"|sure"
-    r"|great"
-    r"|cool"
-    r"|cheers"
-    r"|no\s*problem"
-    r"|you'?re\s*welcome"
-    r"|good\s*to\s*(hear|know)"
-    r"|that'?s\s*(great|good|nice|cool|awesome)"
-    r")"
-    r"[.!?\s]*$",
+    r"|sure|great|cool|cheers"
+    r")\b",
     re.IGNORECASE,
 )
 

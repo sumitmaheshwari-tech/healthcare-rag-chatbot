@@ -128,27 +128,84 @@ response_cache = RedisCache(host="127.0.0.1", port=6379, db=2, ttl_seconds=setti
 import hashlib
 import re
 
+# Intents whose responses are inherently user-specific or time-sensitive
+# and must NEVER be served from a shared cache.
+_UNCACHEABLE_INTENTS = frozenset({
+    "PROFILE_QUERY",   # Patient bills, records, personal info
+    "BOOKING_INTENT",  # Appointment availability changes in real time
+    "DIRECT_ACTION",   # Login, registration — stateful side-effects
+})
+
 def _normalize_query(query: str) -> str:
     """Normalize user query for semantic caching (lowercase, strip extra spaces/punctuation)."""
     q = query.lower().strip()
     q = re.sub(r'[^\w\s]', '', q)
     return re.sub(r'\s+', ' ', q)
 
-def get_response_cache(query: str) -> str:
-    """Retrieve cached response if available for identical/similar queries."""
+def _classify_intent_for_cache(query: str) -> str:
+    """Lightweight intent classification to scope cache keys.
+    Imported lazily to avoid circular imports at module load time."""
+    try:
+        from agent.intent_classifier import classify_intent
+        result = classify_intent(query)
+        return result.get("intent", "GENERAL_KNOWLEDGE")
+    except Exception:
+        return "GENERAL_KNOWLEDGE"
+
+def get_response_cache(query: str, patient_uid: str = "guest") -> str | None:
+    """Retrieve cached response if available for identical/similar queries.
+    
+    Args:
+        query: The raw user message.
+        patient_uid: Authenticated patient UID (used for cache key isolation).
+    
+    Returns:
+        Cached response text, or None on cache miss / uncacheable intent.
+    """
     norm_q = _normalize_query(query)
     if not norm_q or len(norm_q) < 3:
         return None
-    key = f"resp:{hashlib.md5(norm_q.encode('utf-8')).hexdigest()}"
-    return response_cache.get(key)
 
-def set_response_cache(query: str, response_text: str):
-    """Store generated LLM response in cache."""
+    intent = _classify_intent_for_cache(query)
+
+    # Never serve stale cached results for user-specific intents
+    if intent in _UNCACHEABLE_INTENTS:
+        return None
+
+    query_hash = hashlib.md5(norm_q.encode('utf-8')).hexdigest()
+    key = f"resp:{intent}:{query_hash}"
+    hit = response_cache.get(key)
+    if hit:
+        print(f"[CACHE HIT] Response cache matched key resp:{intent}:{query_hash[:8]}...")
+    return hit
+
+def set_response_cache(query: str, response_text: str, patient_uid: str = "guest"):
+    """Store generated LLM response in cache.
+    
+    Args:
+        query: The raw user message.
+        response_text: The generated LLM response to cache.
+        patient_uid: Authenticated patient UID (used for cache key isolation).
+    """
     norm_q = _normalize_query(query)
     if not norm_q or len(norm_q) < 3 or not response_text or len(response_text) < 10:
         return
-    # Do not cache error responses or emergency warnings
-    if any(err_txt in response_text.lower() for err_txt in ["unavailable", "error", "emergency medical attention", "rephrasing"]):
+
+    intent = _classify_intent_for_cache(query)
+
+    # Do not cache user-specific or stateful intents
+    if intent in _UNCACHEABLE_INTENTS:
         return
-    key = f"resp:{hashlib.md5(norm_q.encode('utf-8')).hexdigest()}"
+
+    # Do not cache error responses or emergency warnings
+    resp_lower = response_text.lower()
+    if any(err_txt in resp_lower for err_txt in [
+        "unavailable", "error", "emergency medical attention",
+        "rephrasing", "apologize", "try again"
+    ]):
+        return
+
+    query_hash = hashlib.md5(norm_q.encode('utf-8')).hexdigest()
+    key = f"resp:{intent}:{query_hash}"
     response_cache.set(key, response_text)
+    print(f"[CACHE SET] Stored response for key resp:{intent}:{query_hash[:8]}...")

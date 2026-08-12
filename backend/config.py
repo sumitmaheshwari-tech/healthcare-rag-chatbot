@@ -13,7 +13,7 @@ class Settings:
     """Central configuration for the healthcare RAG chatbot."""
 
     # Provider setting: 'groq', 'ollama', 'openrouter', or 'gemini'
-    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "openrouter").lower()
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini").lower()
 
     # Google Gemini API (for LLM and Embeddings — free tier)
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "AQ.Ab8RN6IIyFKeRnXQGSCxZY49wknN0DpOXqtfDzzTMDJqexHqHg")
@@ -56,7 +56,7 @@ class Settings:
     # Cache TTLs (seconds)
     CACHE_EMBEDDING_TTL: int = int(os.getenv("CACHE_EMBEDDING_TTL", "3600"))  # 1 hour
     CACHE_RETRIEVAL_TTL: int = int(os.getenv("CACHE_RETRIEVAL_TTL", "300"))   # 5 min
-    CACHE_RESPONSE_TTL: int = int(os.getenv("CACHE_RESPONSE_TTL", "120"))     # 2 min
+    CACHE_RESPONSE_TTL: int = int(os.getenv("CACHE_RESPONSE_TTL", "600"))     # 10 min
 
 
 settings = Settings()
