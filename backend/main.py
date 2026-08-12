@@ -296,7 +296,7 @@ async def chat(request: ChatRequest, req_raw: Request, response: Response):
             run_text_buffer = []
             current_run_id = None
             tool_runs_completed = 0
-            MAX_TOOL_ROUNDS = 6  # Allow up to 6 tool executions per user message
+            MAX_TOOL_ROUNDS = 10  # Allow up to 10 tool executions per user message
 
             async for event in agent_graph.astream_events(
                 {

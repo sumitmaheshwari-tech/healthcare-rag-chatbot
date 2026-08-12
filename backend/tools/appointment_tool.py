@@ -18,6 +18,39 @@ from database.models import (
 from database.audit import log_audit_event
 
 
+def _normalize_time(raw_time: str) -> str:
+    """Normalize a time string from any common format to 24h HH:MM.
+    
+    Handles: '10:00 AM', '2:30 pm', '12 AM', '12 PM', '14:00', '9am', '09:00', etc.
+    Returns the normalised 'HH:MM' string, or the original input if parsing fails.
+    """
+    import re as _re
+    t = raw_time.strip()
+    if not t:
+        return t
+
+    # Try common 12h formats: '10:00 AM', '2:30pm', '12 AM', '9am'
+    m = _re.match(r'^(\d{1,2})(?::(\d{2}))?\s*(am|pm|AM|PM|a\.m\.|p\.m\.)$', t)
+    if m:
+        hour = int(m.group(1))
+        minute = int(m.group(2) or 0)
+        period = m.group(3).lower().replace('.', '')
+        if period == 'am':
+            if hour == 12:
+                hour = 0
+        elif period == 'pm':
+            if hour != 12:
+                hour += 12
+        return f"{hour:02d}:{minute:02d}"
+
+    # Try 24h format: '14:00', '09:30'
+    m2 = _re.match(r'^(\d{1,2}):(\d{2})$', t)
+    if m2:
+        return f"{int(m2.group(1)):02d}:{m2.group(2)}"
+
+    return t
+
+
 def _generate_slots(start: str, end: str, duration: int) -> list[str]:
     """Generate time-slot strings between *start* and *end* at *duration*-min intervals."""
     fmt = "%H:%M"
@@ -186,6 +219,9 @@ def book_appointment(
     if not target_date_raw or not target_time_raw:
         return "Please provide both a date (YYYY-MM-DD) and a time slot (e.g. 10:00 AM) to complete the booking."
 
+    # Normalize time to 24h HH:MM format (handles '10:00 AM', '12 AM', '2pm', etc.)
+    target_time_normalized = _normalize_time(target_time_raw)
+
     # Enforce BOLA authorization check
     auth_uid = state.get("authenticated_patient_uid") if state else None
     if not auth_uid or auth_uid != patient_id:
@@ -238,8 +274,21 @@ def book_appointment(
 
         # Check slot is within working hours
         all_slots = _generate_slots(schedule.start_time, schedule.end_time, schedule.slot_duration_mins)
-        if time_str not in all_slots:
-            return f"The time {time_str} is not a valid clinic slot. Available slots are: {', '.join(all_slots)}"
+        if target_time_normalized not in all_slots:
+            # Try a fuzzy hour-only match (e.g. user said '10' meaning '10:00')
+            hour_match = [s for s in all_slots if s.startswith(target_time_normalized.split(':')[0] + ':')]
+            if len(hour_match) == 1:
+                target_time_normalized = hour_match[0]
+            else:
+                # Format available slots in 12h for user-friendly display
+                display_slots = []
+                for s in all_slots:
+                    try:
+                        dt = datetime.strptime(s, '%H:%M')
+                        display_slots.append(dt.strftime('%I:%M %p').lstrip('0'))
+                    except Exception:
+                        display_slots.append(s)
+                return f"The time '{target_time_raw}' is not a valid clinic slot. Available slots are: {', '.join(display_slots)}"
 
         # Check the slot is not already taken
         existing = (
@@ -247,7 +296,7 @@ def book_appointment(
             .filter(
                 Appointment.doctor_id == doctor.id,
                 Appointment.date == target_date,
-                Appointment.time == time_str,
+                Appointment.time == target_time_normalized,
                 Appointment.status == AppointmentStatus.BOOKED,
             )
             .first()
@@ -265,7 +314,7 @@ def book_appointment(
             doctor_id=doctor.id,
             department=doctor.department.name if doctor.department else "General",
             date=target_date,
-            time=time_str,
+            time=target_time_normalized,
             status=AppointmentStatus.BOOKED,
             reason=reason,
             notes=f"Booked via MedCare Chatbot."
