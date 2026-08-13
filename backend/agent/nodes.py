@@ -91,6 +91,7 @@ def get_fallback_llm(provider: str):
                 model=model_name,
                 google_api_key=settings.GOOGLE_API_KEY,
                 temperature=0,
+                timeout=60,
             )
         elif provider == "ollama":
             from langchain_ollama import ChatOllama
@@ -114,6 +115,7 @@ def get_fallback_llm(provider: str):
                 api_key=settings.OPENROUTER_API_KEY,
                 base_url="https://openrouter.ai/api/v1",
                 temperature=0,
+                request_timeout=45,
                 default_headers={
                     "HTTP-Referer": "http://localhost:8000",
                     "X-Title": "MedCare Chatbot",
@@ -270,21 +272,33 @@ async def agent_node(state, config, primary_llm, tools):
             for attempt in range(2):
                 try:
                     response = None
-                    async for chunk in llm_with_tools.astream(payload_messages, config=config):
-                        if response is None:
-                            response = chunk
-                        else:
-                            response += chunk
+                    # Wrap streaming in a per-provider timeout to prevent indefinite hangs
+                    async def _do_stream():
+                        nonlocal response
+                        async for chunk in llm_with_tools.astream(payload_messages, config=config):
+                            if response is None:
+                                response = chunk
+                            else:
+                                response += chunk
+                    await asyncio.wait_for(_do_stream(), timeout=90.0)
                     if response is None:
                         raise RuntimeError(f"Provider '{provider}' returned empty response")
                     return {"messages": [response]}
+                except asyncio.TimeoutError:
+                    last_error = TimeoutError(f"Provider '{provider}' timed out after 90s")
+                    print(f"[FAILOVER] Provider '{provider}' timed out — moving to next provider")
+                    break  # Don't retry timeouts, move to next provider
                 except Exception as inner_e:
                     last_error = inner_e
                     error_str = str(inner_e)
                     print(f"[FAILOVER] Attempt {attempt + 1} failed for provider '{provider}': {inner_e}")
-                    # Skip retries for rate limit errors (429) — they won't recover in 1.5s
+                    # Skip retries for rate limit errors (429) — they won't recover quickly
                     if '429' in error_str or 'rate_limit' in error_str.lower() or 'resource' in error_str.lower() and 'exhausted' in error_str.lower():
                         print(f"[FAILOVER] Rate limit detected for '{provider}' — skipping retries")
+                        break
+                    # Skip retries for timeout-like errors
+                    if any(kw in error_str.lower() for kw in ['timeout', 'timed out', 'deadline exceeded']):
+                        print(f"[FAILOVER] Timeout for '{provider}' — moving to next provider")
                         break
                     # Skip retries for authentication errors (invalid/expired API keys)
                     if any(kw in error_str.lower() for kw in [
@@ -303,7 +317,7 @@ async def agent_node(state, config, primary_llm, tools):
                         print(f"[FAILOVER] Payment/quota error for '{provider}' — disabling permanently")
                         _disabled_providers.add(provider)
                         break
-                    await asyncio.sleep(1.5 * (attempt + 1))
+                    await asyncio.sleep(1.0 * (attempt + 1))
         except Exception as e:
             last_error = e
             print(f"[FAILOVER] Provider '{provider}' initialization or execution failed: {e}")

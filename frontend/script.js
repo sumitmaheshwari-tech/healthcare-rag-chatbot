@@ -110,7 +110,7 @@ async function sendMessage(text) {
     showTypingIndicator();
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 min timeout
+    const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 min timeout
 
     try {
         const res = await fetch(`${API_BASE}/api/chat`, {

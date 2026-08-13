@@ -52,6 +52,7 @@ def build_graph():
             model=model_name,
             google_api_key=settings.GOOGLE_API_KEY,
             temperature=0,
+            timeout=60,
         )
     elif settings.LLM_PROVIDER == "openrouter":
         from langchain_openai import ChatOpenAI
@@ -61,6 +62,7 @@ def build_graph():
             api_key=settings.OPENROUTER_API_KEY,
             base_url="https://openrouter.ai/api/v1",
             temperature=0,
+            request_timeout=45,
             default_headers={
                 "HTTP-Referer": "http://localhost:8000",
                 "X-Title": "MedCare Chatbot",
