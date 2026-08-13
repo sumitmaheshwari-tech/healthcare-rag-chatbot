@@ -13,8 +13,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database.connection import get_db
 from database.models import (
     Doctor, DoctorSchedule, Appointment, AppointmentStatus,
-    Billing, BillingStatus, DoctorLeave, DoctorHoliday
+    Billing, BillingStatus, DoctorLeave, DoctorHoliday,
+    Patient, Invoice, Notification
 )
+from database.encrypt import decrypt_value
 from database.audit import log_audit_event
 
 
@@ -307,7 +309,12 @@ def book_appointment(
                 f"{target_date.strftime('%B %d, %Y')} is already booked."
             )
 
-        # Create appointment
+        # Retrieve patient record to extract real-time details
+        patient = db.query(Patient).filter(Patient.id == patient_id).first()
+        patient_name = patient.name if patient else "Unknown"
+        patient_phone = decrypt_value(patient.phone) if (patient and patient.phone) else "N/A"
+
+        # Create appointment with rich notes
         appt = Appointment(
             appointment_uid=f"appt-{uuid.uuid4().hex[:8]}",
             patient_id=patient_id,
@@ -317,14 +324,23 @@ def book_appointment(
             time=target_time_normalized,
             status=AppointmentStatus.BOOKED,
             reason=reason,
-            notes=f"Booked via MedCare Chatbot."
+            notes=(
+                f"Booked via MedCare Chatbot.\n"
+                f"Patient Name: {patient_name}\n"
+                f"Phone: {patient_phone}\n"
+                f"Patient UUID: {patient_id}\n"
+                f"Location: {doctor.location}\n"
+                f"Fee: ₹{doctor.consultation_fee:.2f}"
+            )
         )
         db.add(appt)
         db.commit()
         db.refresh(appt)
 
-        # Create billing record (status: pending checkout at reception desk)
+        # Generate invoice number
         bill_no = f"INV-{appt.id}-{int(datetime.now().timestamp())}"
+
+        # 1. Create billing record in billings table
         bill = Billing(
             bill_number=bill_no,
             patient_id=patient_id,
@@ -334,9 +350,34 @@ def book_appointment(
             pending=doctor.consultation_fee,
             payment_method="Unpaid",
             status=BillingStatus.PENDING,
-            description=f"Consultation Appointment #{appt.id} (Pending Desk Clearance)"
+            description=(
+                f"Consultation Appointment #{appt.id} with {doctor.name} | "
+                f"Patient: {patient_name} ({patient_id}) | Phone: {patient_phone}"
+            )
         )
         db.add(bill)
+        db.commit()
+        db.refresh(bill)
+
+        # 2. Create invoice record in invoices table
+        invoice = Invoice(
+            invoice_number=bill_no,
+            billing_id=bill.id,
+            amount=doctor.consultation_fee,
+            status="issued"
+        )
+        db.add(invoice)
+
+        # 3. Create notification record in notifications table
+        notif = Notification(
+            patient_id=patient_id,
+            message=(
+                f"Appointment #{appt.id} confirmed with {doctor.name} for "
+                f"{target_date.strftime('%A, %B %d, %Y')} at {time_str or target_time_normalized}. "
+                f"Invoice #{bill_no} generated."
+            )
+        )
+        db.add(notif)
         db.commit()
 
         log_audit_event(
