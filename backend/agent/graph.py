@@ -2,10 +2,10 @@
 
 import os
 import sys
+import sqlite3
 
 from langgraph.graph import StateGraph, START
 from langgraph.prebuilt import ToolNode, tools_condition
-from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import HumanMessage
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -23,6 +23,28 @@ from tools.appointment_tool import (
 from tools.billing_tool import get_patient_bills, get_bill_details
 from tools.patient_tool import get_patient_info, get_medical_history, register_patient, verify_patient_credentials
 from config import settings
+
+
+# ── Persistent Checkpointer (survives restarts) ─────────────────────
+# SqliteSaver stores conversation threads on disk so chat history
+# is preserved across Render cold starts, deploys, and restarts.
+_CHECKPOINT_DB_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "checkpoints.db"
+)
+
+def _get_checkpointer():
+    """Create a SqliteSaver with a persistent SQLite connection."""
+    try:
+        from langgraph.checkpoint.sqlite import SqliteSaver
+        conn = sqlite3.connect(_CHECKPOINT_DB_PATH, check_same_thread=False)
+        saver = SqliteSaver(conn)
+        print(f"[AGENT] Checkpointer: SqliteSaver (persistent) at {_CHECKPOINT_DB_PATH}")
+        return saver
+    except Exception as e:
+        print(f"[AGENT] SqliteSaver failed ({e}), falling back to MemorySaver (non-persistent)")
+        from langgraph.checkpoint.memory import MemorySaver
+        return MemorySaver()
 
 
 def build_graph():
@@ -122,8 +144,8 @@ def build_graph():
     builder.add_conditional_edges("agent", tools_condition)   # → "tools" or END
     builder.add_edge("tools", "agent")                        # loop back
 
-    # Persistent in-memory checkpointer (one per session thread)
-    memory = MemorySaver()
+    # Persistent SQLite checkpointer (survives restarts)
+    memory = _get_checkpointer()
     graph = builder.compile(checkpointer=memory)
 
     print(f"[AGENT] LangGraph agent compiled — provider: {settings.LLM_PROVIDER.upper()}.")

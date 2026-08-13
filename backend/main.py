@@ -288,90 +288,108 @@ async def chat(request: ChatRequest, req_raw: Request, response: Response):
                 yield f"data: {json.dumps({'type': 'done'})}\n\n"
                 return
 
-            # ── Buffered streaming ────────────────────────────────────
-            # ALWAYS buffer tokens per LLM run. On run-end, check if the
-            # response had tool calls. If yes → discard buffer (hedging).
-            # If no → flush buffer to client (it's the final answer).
-            # This prevents hedging text from leaking during tool loops.
+            # ── Buffered streaming with keepalive & timeout ──────────
             run_text_buffer = []
             current_run_id = None
             tool_runs_completed = 0
-            MAX_TOOL_ROUNDS = 10  # Allow up to 10 tool executions per user message
+            MAX_TOOL_ROUNDS = 6
+            REQUEST_TIMEOUT_SECONDS = 90
 
-            async for event in agent_graph.astream_events(
-                {
-                    "messages": [HumanMessage(content=user_message)],
-                    "authenticated_patient_uid": auth_uid
-                },
-                config=config,
-                version="v2"
-            ):
-                evt_name = event["event"]
-                run_id = event.get("run_id")
+            async def _run_agent_stream():
+                """Run the agent and collect SSE events. Returns list of SSE strings."""
+                nonlocal run_text_buffer, current_run_id, tool_runs_completed, t_first_token
+                sse_events = []
 
-                if evt_name == "on_chat_model_start":
-                    current_run_id = run_id
-                    run_text_buffer = []
+                async for event in agent_graph.astream_events(
+                    {
+                        "messages": [HumanMessage(content=user_message)],
+                        "authenticated_patient_uid": auth_uid
+                    },
+                    config=config,
+                    version="v2"
+                ):
+                    evt_name = event["event"]
+                    run_id = event.get("run_id")
 
-                elif evt_name == "on_chat_model_stream":
-                    chunk = event["data"]["chunk"]
-                    if hasattr(chunk, "content") and chunk.content:
-                        # Skip chunks that are purely tool-call fragments
-                        if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
-                            continue
-                        text_chunk = chunk.content
-                        if isinstance(text_chunk, list):
-                            text_chunk = "".join([b.get("text", "") if isinstance(b, dict) else str(b) for b in text_chunk])
-                        if text_chunk:
-                            # Always buffer — we can only decide to flush or discard
-                            # AFTER on_chat_model_end reveals whether tool calls exist
-                            run_text_buffer.append(text_chunk)
-
-                elif evt_name == "on_chat_model_end":
-                    output = event["data"].get("output")
-                    has_tool_calls = (
-                        output is not None
-                        and hasattr(output, "tool_calls")
-                        and output.tool_calls
-                    )
-                    if has_tool_calls:
-                        # Discard hedging/refusal text — tools will provide real data
+                    if evt_name == "on_chat_model_start":
+                        current_run_id = run_id
                         run_text_buffer = []
-                    else:
-                        # Final answer — flush buffered text to the client
-                        final_text = "".join(run_text_buffer)
-                        if not final_text and output and hasattr(output, "content") and output.content:
-                            final_text = output.content if isinstance(output.content, str) else str(output.content)
-                        if final_text:
-                            if t_first_token is None:
-                                t_first_token = time.perf_counter()
-                                ttft_ms = (t_first_token - t_request_start) * 1000
-                                print(f"[PERF] TTFT (time to first token): {ttft_ms:.0f}ms")
-                            yield f"data: {json.dumps({'type': 'content', 'text': final_text})}\n\n"
-                            try:
-                                set_response_cache(user_message, final_text, patient_uid=auth_uid or "guest")
-                            except Exception as ce:
-                                print(f"[CACHE WARNING] Failed to cache response: {ce}")
-                        run_text_buffer = []
+                        sse_events.append(": keepalive\n\n")
 
-                elif evt_name == "on_tool_end":
-                    tool_runs_completed += 1
-                    if tool_runs_completed >= MAX_TOOL_ROUNDS:
-                        print(f"[GUARD] Tool loop detected: {tool_runs_completed} rounds. Force-stopping.")
-                        yield f"data: {json.dumps({'type': 'content', 'text': 'I apologize, I encountered an issue processing your request. Could you please provide more specific details (e.g., exact date in YYYY-MM-DD format and preferred time)?'})}\n\n"
-                        t_first_token = t_first_token or time.perf_counter()
-                        break
+                    elif evt_name == "on_chat_model_stream":
+                        chunk = event["data"]["chunk"]
+                        if hasattr(chunk, "content") and chunk.content:
+                            if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
+                                continue
+                            text_chunk = chunk.content
+                            if isinstance(text_chunk, list):
+                                text_chunk = "".join([b.get("text", "") if isinstance(b, dict) else str(b) for b in text_chunk])
+                            if text_chunk:
+                                run_text_buffer.append(text_chunk)
 
-            # If no content was ever streamed, send a fallback message
+                    elif evt_name == "on_chat_model_end":
+                        output = event["data"].get("output")
+                        has_tool_calls = (
+                            output is not None
+                            and hasattr(output, "tool_calls")
+                            and output.tool_calls
+                        )
+                        if has_tool_calls:
+                            run_text_buffer = []
+                        else:
+                            final_text = "".join(run_text_buffer)
+                            if not final_text and output and hasattr(output, "content") and output.content:
+                                final_text = output.content if isinstance(output.content, str) else str(output.content)
+                            if final_text:
+                                if t_first_token is None:
+                                    t_first_token = time.perf_counter()
+                                    ttft_ms = (t_first_token - t_request_start) * 1000
+                                    print(f"[PERF] TTFT (time to first token): {ttft_ms:.0f}ms")
+                                sse_events.append(f"data: {json.dumps({'type': 'content', 'text': final_text})}\n\n")
+                                try:
+                                    set_response_cache(user_message, final_text, patient_uid=auth_uid or "guest")
+                                except Exception as ce:
+                                    print(f"[CACHE WARNING] Failed to cache response: {ce}")
+                            run_text_buffer = []
+
+                    elif evt_name == "on_tool_start":
+                        sse_events.append(": keepalive\n\n")
+
+                    elif evt_name == "on_tool_end":
+                        tool_runs_completed += 1
+                        sse_events.append(": keepalive\n\n")
+                        if tool_runs_completed >= MAX_TOOL_ROUNDS:
+                            print(f"[GUARD] Tool loop detected: {tool_runs_completed} rounds. Force-stopping.")
+                            sse_events.append(f"data: {json.dumps({'type': 'content', 'text': 'I apologize, I encountered an issue processing your request. Could you please provide more specific details (e.g., exact date in YYYY-MM-DD format and preferred time)?'})}\n\n")
+                            t_first_token = t_first_token or time.perf_counter()
+                            break
+
+                return sse_events
+
+            # Execute with timeout
+            try:
+                import asyncio
+                sse_results = await asyncio.wait_for(
+                    _run_agent_stream(),
+                    timeout=REQUEST_TIMEOUT_SECONDS
+                )
+                for sse in sse_results:
+                    yield sse
+            except asyncio.TimeoutError:
+                print(f"[TIMEOUT] Request exceeded {REQUEST_TIMEOUT_SECONDS}s limit.")
+                yield f"data: {json.dumps({'type': 'content', 'text': 'I apologize, the request took too long. Please try again — the server may have been warming up. If this persists, try breaking your request into steps.'})}\n\n"
+                t_first_token = t_first_token or time.perf_counter()
+
+            # If no content was ever streamed, send a fallback
             if t_first_token is None:
                 yield f"data: {json.dumps({'type': 'content', 'text': 'I apologize, I was unable to generate a response. Please try rephrasing your question.'})}\n\n"
 
-            # Verify if login or registration succeeded by inspecting the final state of the graph
+            # ── Verify if login/registration succeeded ────────────────
             state = await agent_graph.aget_state(config)
             verified_patient_id = ""
             verified_patient_name = ""
             import re
-            
+
             for msg in reversed(state.values.get("messages", [])):
                 content_str = str(msg.content)
                 m_verify = re.search(r"Verification successful for patient (.*?) \(ID: (pat-\w+-\w+-\w+-\w+-\w+|pat-\w+)\)", content_str)
