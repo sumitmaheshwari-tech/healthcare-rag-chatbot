@@ -2,7 +2,6 @@
 
 import os
 import sys
-import sqlite3
 
 from langgraph.graph import StateGraph, START
 from langgraph.prebuilt import ToolNode, tools_condition
@@ -26,28 +25,30 @@ from config import settings
 
 
 # ── Persistent Checkpointer (survives restarts) ─────────────────────
-# SqliteSaver stores conversation threads on disk so chat history
-# is preserved across Render cold starts, deploys, and restarts.
 _CHECKPOINT_DB_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "checkpoints.db"
 )
 
-def _get_checkpointer():
-    """Create a SqliteSaver with a persistent SQLite connection."""
+
+async def _get_async_checkpointer():
+    """Create an AsyncSqliteSaver for async-compatible persistent checkpointing."""
     try:
-        from langgraph.checkpoint.sqlite import SqliteSaver
-        conn = sqlite3.connect(_CHECKPOINT_DB_PATH, check_same_thread=False)
-        saver = SqliteSaver(conn)
-        print(f"[AGENT] Checkpointer: SqliteSaver (persistent) at {_CHECKPOINT_DB_PATH}")
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+        import aiosqlite
+        # Manually create connection (from_conn_string returns a context manager)
+        conn = await aiosqlite.connect(_CHECKPOINT_DB_PATH)
+        saver = AsyncSqliteSaver(conn)
+        await saver.setup()
+        print(f"[AGENT] Checkpointer: AsyncSqliteSaver (persistent) at {_CHECKPOINT_DB_PATH}")
         return saver
     except Exception as e:
-        print(f"[AGENT] SqliteSaver failed ({e}), falling back to MemorySaver (non-persistent)")
+        print(f"[AGENT] AsyncSqliteSaver failed ({e}), falling back to MemorySaver (non-persistent)")
         from langgraph.checkpoint.memory import MemorySaver
         return MemorySaver()
 
 
-def build_graph():
+async def build_graph():
     """Construct, compile, and return the LangGraph agent with checkpointer."""
 
     # Collect every tool the agent may use
@@ -144,8 +145,8 @@ def build_graph():
     builder.add_conditional_edges("agent", tools_condition)   # → "tools" or END
     builder.add_edge("tools", "agent")                        # loop back
 
-    # Persistent SQLite checkpointer (survives restarts)
-    memory = _get_checkpointer()
+    # Persistent async SQLite checkpointer (survives restarts)
+    memory = await _get_async_checkpointer()
     graph = builder.compile(checkpointer=memory)
 
     print(f"[AGENT] LangGraph agent compiled — provider: {settings.LLM_PROVIDER.upper()}.")

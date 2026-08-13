@@ -85,7 +85,7 @@ async def lifespan(app: FastAPI):
 
     # 3. LangGraph agent
     print("[3/3] Building LangGraph agent …")
-    agent_graph = build_graph()
+    agent_graph = await build_graph()
     print("[3/3] Agent ready.\n")
 
     print("=" * 60)
