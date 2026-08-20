@@ -3,6 +3,11 @@
 import os
 import sys
 
+try:
+    import pip_system_certs.wrapt_requests
+except Exception:
+    pass
+
 from langgraph.graph import StateGraph, START
 from langgraph.prebuilt import ToolNode, tools_condition
 from langchain_core.messages import HumanMessage
@@ -91,34 +96,19 @@ async def build_graph():
                 "X-Title": "MedCare Chatbot",
             }
         )
-    elif settings.LLM_PROVIDER == "ollama":
-        try:
-            from langchain_ollama import ChatOllama
-            print(f"[AGENT] Initializing local Ollama model: {settings.OLLAMA_MODEL} at {settings.OLLAMA_BASE_URL} …")
-            llm = ChatOllama(
-                model=settings.OLLAMA_MODEL,
-                base_url=settings.OLLAMA_BASE_URL,
-                temperature=0,
-                num_ctx=4096,
-                num_predict=1024,
-            )
-        except Exception as e:
-            print(f"[AGENT] Ollama unavailable ({e}). Falling back to Groq...")
-            from langchain_groq import ChatGroq
-            llm = ChatGroq(
-                model=settings.GROQ_LLM_MODEL,
-                groq_api_key=settings.GROQ_API_KEY,
-                temperature=0,
-                request_timeout=15.0,
-            )
     else:
-        from langchain_groq import ChatGroq
-        print(f"[AGENT] Initializing Groq model: {settings.GROQ_LLM_MODEL} …")
-        llm = ChatGroq(
-            model=settings.GROQ_LLM_MODEL,
-            groq_api_key=settings.GROQ_API_KEY,
+        from langchain_openai import ChatOpenAI
+        print(f"[AGENT] Initializing OpenRouter model: {settings.OPENROUTER_MODEL} …")
+        llm = ChatOpenAI(
+            model=settings.OPENROUTER_MODEL,
+            api_key=settings.OPENROUTER_API_KEY,
+            base_url="https://openrouter.ai/api/v1",
             temperature=0,
-            request_timeout=15.0,
+            request_timeout=45,
+            default_headers={
+                "HTTP-Referer": "http://localhost:8000",
+                "X-Title": "MedCare Chatbot",
+            }
         )
 
 

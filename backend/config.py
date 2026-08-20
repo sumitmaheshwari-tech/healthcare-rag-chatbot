@@ -4,6 +4,18 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
+# Ensure SSL certificate verification works reliably across all Windows Python environments
+try:
+    import pip_system_certs.wrapt_requests
+except Exception:
+    pass
+try:
+    import certifi
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+except ImportError:
+    pass
+
 # Load .env from project root with override enabled for hot-reloads
 env_path = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(dotenv_path=env_path, override=True)
@@ -15,19 +27,15 @@ class Settings:
     # Provider setting: 'groq', 'ollama', 'openrouter', or 'gemini'
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini").lower()
 
-    # Google Gemini API (for LLM and Embeddings — free tier)
-    GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "AQ.Ab8RN6IIyFKeRnXQGSCxZY49wknN0DpOXqtfDzzTMDJqexHqHg")
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "gemini-3.5-flash")
-    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "gemini-embedding-2")
+    # Google Gemini API (for LLM — free tier)
+    GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "gemini-flash-latest")
+    # Embeddings (OpenRouter NVIDIA Nemotron / Gemini / Local)
+    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "nvidia/nemotron-3-embed-1b:free")
 
-    # OpenRouter API (NVIDIA Nemotron Nano 12B / Cloud GPUs)
-    OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "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")
-    OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-nano-12b-v2-vl:free")
-
-    # Groq API (Cloud)
-    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "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")
-    GROQ_LLM_MODEL: str = os.getenv("GROQ_LLM_MODEL", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"))
-    GROQ_LLM_BASE_URL: str = os.getenv("GROQ_LLM_BASE_URL", "https://api.groq.com/openai/v1")
+    # OpenRouter API (NVIDIA Nemotron 3.5 Lightning / Cloud GPUs)
+    OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+    OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3.5-lightning:free")
 
     # Ollama (Local)
     OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -37,8 +45,9 @@ class Settings:
     CHROMA_PERSIST_DIR: str = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
     CHROMA_COLLECTION: str = "hospital_knowledge"
 
-    # Database
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./hospital.db")
+    # Database — Render provides postgres:// URLs, SQLAlchemy 2.0 needs postgresql://
+    _raw_db_url: str = os.getenv("DATABASE_URL", "sqlite:///./hospital.db")
+    DATABASE_URL: str = _raw_db_url.replace("postgres://", "postgresql://", 1) if _raw_db_url.startswith("postgres://") else _raw_db_url
 
     # Paths
     BASE_DIR: Path = Path(__file__).resolve().parent

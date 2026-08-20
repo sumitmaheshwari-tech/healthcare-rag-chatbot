@@ -20,10 +20,19 @@ audit_logger.setLevel(logging.INFO)
 
 # Avoid adding duplicate handlers if the logger is reinitialized
 if not audit_logger.handlers:
-    file_handler = logging.FileHandler(str(AUDIT_LOG_FILE), encoding="utf-8")
-    formatter = logging.Formatter('%(asctime)s - %(message)s')
-    file_handler.setFormatter(formatter)
-    audit_logger.addHandler(file_handler)
+    # File handler (works locally, ephemeral on Render but non-fatal)
+    try:
+        file_handler = logging.FileHandler(str(AUDIT_LOG_FILE), encoding="utf-8")
+        formatter = logging.Formatter('%(asctime)s - %(message)s')
+        file_handler.setFormatter(formatter)
+        audit_logger.addHandler(file_handler)
+    except Exception:
+        pass  # Gracefully skip file logging on read-only filesystems
+
+    # Stdout handler (always works, visible in Render log dashboard)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(logging.Formatter('[AUDIT] %(asctime)s - %(message)s'))
+    audit_logger.addHandler(stream_handler)
 
 def log_audit_event(
     request_id: str,

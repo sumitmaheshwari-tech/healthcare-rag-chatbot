@@ -57,26 +57,13 @@ async def lifespan(app: FastAPI):
     print("  MedCare RAG Chatbot — Starting up …")
     print("=" * 60)
 
-    # 1. Database (Re-init for schema updates)
+    # 1. Database (Persistent Storage for All Patients & Appointments)
     print("\n[1/3] Initialising database …")
-    db_path = BACKEND_DIR / "hospital.db"
-    if settings.ENV == "development":
-        # Dev mode: delete and recreate DB on every restart for clean state
-        if db_path.exists():
-            try:
-                db_path.unlink()
-                print("[1/3] Cleaned old database (dev mode).")
-            except Exception as e:
-                print(f"[1/3] Warning: Could not delete old database: {e}")
-        init_db()
-        db = get_db()
-        seed_database(db)
-        db.close()
-    else:
-        # Production/staging: create tables if missing, never delete
-        init_db()
-        print("[1/3] Database tables ensured (production mode).")
-    print("[1/3] Database ready.\n")
+    init_db()
+    db = get_db()
+    seed_database(db)
+    db.close()
+    print("[1/3] Database tables ensured & patient data preserved.\n")
 
     # 2. Knowledge base
     print("[2/3] Ingesting knowledge base …")
@@ -423,11 +410,6 @@ async def chat(request: ChatRequest, req_raw: Request, response: Response):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-@app.get("/api/health")
-async def health():
-    return {"status": "healthy", "agent_ready": agent_graph is not None}
-
-
 @app.post("/api/patients/register")
 async def register_patient(req: RegisterRequest, req_raw: Request, response: Response):
     """Register a new patient securely, generating a unique MRN and setting JWT session."""
@@ -738,6 +720,7 @@ async def health_check():
     """System health endpoint reporting status of Database, Redis, and LLM configurations."""
     health_status = {
         "status": "healthy",
+        "agent_ready": agent_graph is not None,
         "database": "unhealthy",
         "redis": "unhealthy",
         "primary_llm": "unknown"
@@ -763,12 +746,11 @@ async def health_check():
         health_status["redis"] = "degraded (falling back to in-memory TTLCache)"
 
     # 3. LLM Configuration Check
-    groq_key = os.getenv("GROQ_API_KEY")
-    gemini_key = os.getenv("GEMINI_API_KEY")
-    if groq_key:
-        health_status["primary_llm"] = "configured (Groq)"
-    elif gemini_key:
-        health_status["primary_llm"] = "configured (Gemini fallback)"
+    from config import settings as _s
+    if _s.GOOGLE_API_KEY:
+        health_status["primary_llm"] = f"configured (Gemini: {_s.LLM_MODEL})"
+    elif _s.OPENROUTER_API_KEY:
+        health_status["primary_llm"] = f"configured (OpenRouter: {_s.OPENROUTER_MODEL})"
     else:
         health_status["primary_llm"] = "unconfigured"
         health_status["status"] = "degraded"

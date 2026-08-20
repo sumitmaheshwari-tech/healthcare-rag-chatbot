@@ -4,6 +4,12 @@ import os
 import sys
 import time
 import asyncio
+
+try:
+    import pip_system_certs.wrapt_requests
+except Exception:
+    pass
+
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, AIMessage
 
 def sanitize_messages_for_llm(messages):
@@ -100,13 +106,6 @@ def get_fallback_llm(provider: str):
                 base_url=settings.OLLAMA_BASE_URL,
                 temperature=0,
                 num_ctx=4096,
-            )
-        elif provider == "groq" and settings.GROQ_API_KEY:
-            from langchain_groq import ChatGroq
-            return ChatGroq(
-                model=settings.GROQ_LLM_MODEL,
-                groq_api_key=settings.GROQ_API_KEY,
-                temperature=0,
             )
         elif provider == "openrouter" and settings.OPENROUTER_API_KEY:
             from langchain_openai import ChatOpenAI
@@ -242,7 +241,7 @@ async def agent_node(state, config, primary_llm, tools):
     trimmed_messages = [SystemMessage(content=full_system_prompt)] + trimmed_messages
 
     # ── Multi-Provider Failover Gateway ───────────────────────────────
-    providers_to_try = [settings.LLM_PROVIDER, "groq", "gemini", "openrouter"]
+    providers_to_try = [settings.LLM_PROVIDER, "gemini", "openrouter"]
     
     # Remove duplicates while keeping order
     seen = set()
@@ -271,16 +270,10 @@ async def agent_node(state, config, primary_llm, tools):
             # Retry twice with exponential backoff for this provider
             for attempt in range(2):
                 try:
-                    response = None
-                    # Wrap streaming in a per-provider timeout to prevent indefinite hangs
-                    async def _do_stream():
-                        nonlocal response
-                        async for chunk in llm_with_tools.astream(payload_messages, config=config):
-                            if response is None:
-                                response = chunk
-                            else:
-                                response += chunk
-                    await asyncio.wait_for(_do_stream(), timeout=90.0)
+                    response = await asyncio.wait_for(
+                        llm_with_tools.ainvoke(payload_messages, config=config),
+                        timeout=45.0
+                    )
                     if response is None:
                         raise RuntimeError(f"Provider '{provider}' returned empty response")
                     return {"messages": [response]}

@@ -79,7 +79,17 @@ def _get_embeddings():
     if _cached_embeddings is not None:
         return _cached_embeddings
 
-    if "gemini" in settings.EMBEDDING_MODEL.lower() or settings.EMBEDDING_MODEL.startswith("models/"):
+    if "nemotron" in settings.EMBEDDING_MODEL.lower() or "openrouter" in settings.EMBEDDING_MODEL.lower() or "nvidia" in settings.EMBEDDING_MODEL.lower():
+        from langchain_openai import OpenAIEmbeddings
+        _cached_embeddings = OpenAIEmbeddings(
+            model=settings.EMBEDDING_MODEL,
+            api_key=settings.OPENROUTER_API_KEY,
+            base_url="https://openrouter.ai/api/v1",
+            check_embedding_ctx_length=False,
+            tiktoken_enabled=False,
+            encoding_format="float",
+        )
+    elif "gemini" in settings.EMBEDDING_MODEL.lower() or settings.EMBEDDING_MODEL.startswith("models/"):
         from langchain_google_genai import GoogleGenerativeAIEmbeddings
         # Clean model name to avoid double-prefixing in Google GenAI SDK
         model_name = settings.EMBEDDING_MODEL
