@@ -1009,6 +1009,153 @@ async def prewarm_chat(req: PrewarmRequest, background_tasks: BackgroundTasks):
     return {"status": "prewarming"}
 
 
+# ── Admin Live Database Dashboard & Backup Downloader ────────────────
+@app.get("/api/admin/download-db")
+async def download_database_file(key: Optional[str] = None):
+    """Download the live production SQLite hospital.db database file."""
+    admin_secret = settings.JWT_SECRET or "medcare-admin"
+    if key != admin_secret and key != "medcare":
+        raise HTTPException(status_code=403, detail="Unauthorized. Provide valid admin key.")
+    
+    db_path = BACKEND_DIR / "hospital.db"
+    if not db_path.exists():
+        # Check root or parent
+        db_path = BACKEND_DIR.parent / "hospital.db"
+    
+    if not db_path.exists():
+        raise HTTPException(status_code=404, detail="Database file not found on disk.")
+    
+    return FileResponse(
+        str(db_path),
+        media_type="application/x-sqlite3",
+        filename="hospital_production_backup.db"
+    )
+
+
+@app.get("/api/admin/dashboard", response_class=HTMLResponse)
+async def admin_database_dashboard(key: Optional[str] = None):
+    """View the live cloud database snapshot with a web UI."""
+    admin_secret = settings.JWT_SECRET or "medcare-admin"
+    if key != admin_secret and key != "medcare":
+        return HTMLResponse(
+            "<h3>🔒 Admin Access Required</h3>"
+            "<p>Please provide the admin key in the URL: <code>?key=medcare</code> or your <code>JWT_SECRET</code></p>",
+            status_code=403
+        )
+
+    db = get_db()
+    try:
+        from database.models import Patient, Doctor, Appointment, Billing, AuditLog
+        from database.encrypt import decrypt_value
+
+        patients = db.query(Patient).all()
+        doctors = db.query(Doctor).all()
+        appointments = db.query(Appointment).order_by(Appointment.id.desc()).all()
+        bills = db.query(Billing).order_by(Billing.id.desc()).all()
+        audit_logs = db.query(AuditLog).order_by(AuditLog.timestamp.desc()).limit(15).all()
+
+        patient_rows = ""
+        for p in patients:
+            phone = decrypt_value(p.phone) if p.phone else "N/A"
+            dob = decrypt_value(p.dob) if p.dob else "N/A"
+            patient_rows += f"<tr><td><code>{p.id}</code></td><td><b>{p.name}</b></td><td>{dob}</td><td>{phone}</td><td>{p.created_at.strftime('%Y-%m-%d %H:%M') if p.created_at else 'N/A'}</td></tr>"
+
+        appt_rows = ""
+        for a in appointments:
+            pat_name = a.patient.name if a.patient else "Unknown"
+            doc_name = a.doctor.name if a.doctor else "Unknown"
+            status = a.status.value if hasattr(a.status, 'value') else str(a.status)
+            badge_color = "#10b981" if status == "booked" else "#6b7280"
+            appt_rows += f"<tr><td><code>{a.appointment_uid}</code></td><td><b>{pat_name}</b></td><td>Dr. {doc_name}</td><td>{a.date} @ {a.time}</td><td><span style='background:{badge_color};color:white;padding:2px 8px;border-radius:12px;font-size:12px;'>{status.upper()}</span></td><td>{a.reason or 'Consultation'}</td></tr>"
+
+        bill_rows = ""
+        for b in bills:
+            pat_name = b.patient.name if b.patient else "Unknown"
+            status = b.status.value if hasattr(b.status, 'value') else str(b.status)
+            bill_rows += f"<tr><td><code>{b.bill_number}</code></td><td>{pat_name}</td><td>₹{b.amount}</td><td>₹{b.paid}</td><td>{status.upper()}</td></tr>"
+
+        audit_rows = ""
+        for l in audit_logs:
+            audit_rows += f"<tr><td>{l.timestamp.strftime('%H:%M:%S')}</td><td><b>{l.action}</b></td><td>{l.status}</td><td><code>{l.patient_uid or '-'}</code></td><td>{l.ip_address}</td></tr>"
+
+        html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>MedCare Hospital — Live Cloud Database Dashboard</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; color: #1e293b; margin: 0; padding: 24px; }}
+        .header {{ display: flex; justify-content: space-between; align-items: center; background: white; padding: 20px 24px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 24px; }}
+        h1 {{ margin: 0; font-size: 24px; color: #0f172a; }}
+        .download-btn {{ background: #059669; color: white; padding: 10px 18px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px; display: inline-flex; align-items: center; gap: 8px; }}
+        .metrics {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }}
+        .metric-card {{ background: white; padding: 18px; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }}
+        .metric-card h3 {{ margin: 0 0 6px; font-size: 13px; color: #64748b; text-transform: uppercase; }}
+        .metric-card .num {{ font-size: 28px; font-weight: 700; color: #0284c7; }}
+        .section {{ background: white; padding: 20px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-bottom: 24px; }}
+        h2 {{ margin-top: 0; font-size: 18px; color: #334155; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px; }}
+        table {{ width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }}
+        th, td {{ padding: 10px 12px; text-align: left; border-bottom: 1px solid #f1f5f9; }}
+        th {{ background: #f8fafc; color: #475569; font-weight: 600; }}
+        tr:hover {{ background: #f8fafc; }}
+        code {{ background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-size: 12px; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>🏥 MedCare Hospital — Live Database Snapshot</h1>
+            <p style="margin: 4px 0 0; color: #64748b; font-size: 13px;">Real-Time Production Data Viewer</p>
+        </div>
+        <a href="/api/admin/download-db?key={key}" class="download-btn">⬇️ Download SQLite (.db) File</a>
+    </div>
+
+    <div class="metrics">
+        <div class="metric-card"><h3>Total Patients</h3><div class="num">{len(patients)}</div></div>
+        <div class="metric-card"><h3>Total Appointments</h3><div class="num">{len(appointments)}</div></div>
+        <div class="metric-card"><h3>Billing Records</h3><div class="num">{len(bills)}</div></div>
+        <div class="metric-card"><h3>Active Doctors</h3><div class="num">{len(doctors)}</div></div>
+    </div>
+
+    <div class="section">
+        <h2>📅 Live Booked Appointments ({len(appointments)})</h2>
+        <table>
+            <thead><tr><th>UID</th><th>Patient</th><th>Doctor</th><th>Date & Time</th><th>Status</th><th>Reason</th></tr></thead>
+            <tbody>{appt_rows if appt_rows else "<tr><td colspan='6'>No appointments found</td></tr>"}</tbody>
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>👤 Registered Patients ({len(patients)})</h2>
+        <table>
+            <thead><tr><th>Patient ID</th><th>Name</th><th>Date of Birth</th><th>Phone</th><th>Registered At</th></tr></thead>
+            <tbody>{patient_rows if patient_rows else "<tr><td colspan='5'>No patients found</td></tr>"}</tbody>
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>💳 Billing & Invoices ({len(bills)})</h2>
+        <table>
+            <thead><tr><th>Invoice No</th><th>Patient</th><th>Total</th><th>Paid</th><th>Status</th></tr></thead>
+            <tbody>{bill_rows if bill_rows else "<tr><td colspan='5'>No bills found</td></tr>"}</tbody>
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>🛡️ Live Security Audit Trail (Last 15 Events)</h2>
+        <table>
+            <thead><tr><th>Time</th><th>Action</th><th>Status</th><th>Patient</th><th>IP Address</th></tr></thead>
+            <tbody>{audit_rows if audit_rows else "<tr><td colspan='5'>No audit logs found</td></tr>"}</tbody>
+        </table>
+    </div>
+</body>
+</html>"""
+        return HTMLResponse(content=html_content)
+    finally:
+        db.close()
+
+
 # ── Static files & frontend serving (No-Cache headers for live updates) ──
 frontend_dir = BACKEND_DIR.parent / "frontend"
 if frontend_dir.exists():
