@@ -506,6 +506,48 @@ async def register_patient(req: RegisterRequest, req_raw: Request, response: Res
         db.close()
 
 
+def normalize_dob(dob_str: str) -> str:
+    """Normalize various date formats (YYYY-MM-DD, DD-MM-YYYY, DD/MM/YYYY) to standard YYYY-MM-DD."""
+    if not dob_str:
+        return ""
+    clean = dob_str.strip().replace("/", "-")
+    parts = clean.split("-")
+    if len(parts) == 3:
+        if len(parts[0]) <= 2 and len(parts[2]) == 4:
+            return f"{parts[2]}-{parts[1].zfill(2)}-{parts[0].zfill(2)}"
+        if len(parts[0]) == 4:
+            return f"{parts[0]}-{parts[1].zfill(2)}-{parts[2].zfill(2)}"
+    return clean
+
+
+def normalize_phone_number(phone_str: str) -> str:
+    """Extract clean 10-digit mobile number digits."""
+    digits = "".join(c for c in phone_str if c.isdigit())
+    return digits[-10:] if len(digits) >= 10 else digits
+
+
+def find_patient_in_db(db, patient_uid_or_phone: str, phone_str: str = ""):
+    """Flexible patient lookup by Patient ID (case-insensitive) or Registered Mobile Number."""
+    all_patients = db.query(Patient).all()
+    cleaned_uid = (patient_uid_or_phone or "").strip().lower()
+    target_phone = normalize_phone_number(phone_str or patient_uid_or_phone or "")
+
+    # 1. Match by Patient ID (case-insensitive)
+    if cleaned_uid:
+        for p in all_patients:
+            if p.id.strip().lower() == cleaned_uid:
+                return p
+
+    # 2. Match by Phone Number
+    if target_phone:
+        for p in all_patients:
+            p_phone = normalize_phone_number(decrypt_value(p.phone) if p.phone else "")
+            if p_phone and p_phone == target_phone:
+                return p
+
+    return None
+
+
 @app.post("/api/patients/login")
 async def login_patient(req: LoginRequest, req_raw: Request, response: Response):
     """Authenticate patient directly using Patient ID, Date of Birth, and Mobile Number."""
@@ -523,7 +565,7 @@ async def login_patient(req: LoginRequest, req_raw: Request, response: Response)
 
     db = get_db()
     try:
-        patient = db.query(Patient).filter(Patient.id == req.patient_uid.strip()).first()
+        patient = find_patient_in_db(db, req.patient_uid, req.phone)
 
         # 2. Validate Patient ID exists
         if not patient:
@@ -535,9 +577,9 @@ async def login_patient(req: LoginRequest, req_raw: Request, response: Response)
                 patient_uid=req.patient_uid,
                 ip_address=ip_addr,
                 user_agent=req_raw.headers.get("User-Agent"),
-                details="Login failed: Patient ID not found."
+                details="Login failed: Patient ID or phone not found."
             )
-            raise HTTPException(status_code=400, detail="Invalid Patient ID. Please check your Patient ID.")
+            raise HTTPException(status_code=400, detail="Invalid Patient ID or Mobile Number. Please check your details or register.")
 
         # 3. Check Account Lockout
         acc_remaining = check_account_lockout(patient)
@@ -548,8 +590,9 @@ async def login_patient(req: LoginRequest, req_raw: Request, response: Response)
             )
 
         # 4. Validate DOB match
-        dec_dob = decrypt_value(patient.dob)
-        if dec_dob != req.dob.strip():
+        target_dob = normalize_dob(req.dob)
+        dec_dob = normalize_dob(decrypt_value(patient.dob) if patient.dob else "")
+        if target_dob and dec_dob and dec_dob != target_dob:
             increment_ip_failed_attempt(ip_addr)
             increment_account_failed_attempt(db, patient, ip_addr)
             
@@ -557,7 +600,7 @@ async def login_patient(req: LoginRequest, req_raw: Request, response: Response)
                 request_id=req_id,
                 action="LOGIN",
                 status="FAILED",
-                patient_uid=req.patient_uid,
+                patient_uid=patient.id,
                 ip_address=ip_addr,
                 user_agent=req_raw.headers.get("User-Agent"),
                 details="Login failed: Date of Birth mismatch."
@@ -565,9 +608,9 @@ async def login_patient(req: LoginRequest, req_raw: Request, response: Response)
             raise HTTPException(status_code=400, detail="Invalid Date of Birth.")
 
         # 5. Validate Mobile Phone match
-        dec_phone = decrypt_value(patient.phone).replace(" ", "").replace("-", "")
-        req_phone = req.phone.strip().replace(" ", "").replace("-", "")
-        if not (dec_phone == req_phone or dec_phone.endswith(req_phone) or req_phone.endswith(dec_phone)):
+        target_phone = normalize_phone_number(req.phone or "")
+        dec_phone = normalize_phone_number(decrypt_value(patient.phone) if patient.phone else "")
+        if target_phone and dec_phone and target_phone != dec_phone:
             increment_ip_failed_attempt(ip_addr)
             increment_account_failed_attempt(db, patient, ip_addr)
             
@@ -575,7 +618,7 @@ async def login_patient(req: LoginRequest, req_raw: Request, response: Response)
                 request_id=req_id,
                 action="LOGIN",
                 status="FAILED",
-                patient_uid=req.patient_uid,
+                patient_uid=patient.id,
                 ip_address=ip_addr,
                 user_agent=req_raw.headers.get("User-Agent"),
                 details="Login failed: Mobile phone mismatch."
@@ -618,34 +661,36 @@ async def initiate_telegram_auth(req: TelegramAuthInitiateRequest, req_raw: Requ
     db = get_db()
     try:
         if req.flow == "login":
-            # Validate login credentials against database
-            patient = db.query(Patient).filter(Patient.id == req.patient_uid.strip()).first()
+            patient = find_patient_in_db(db, req.patient_uid, req.phone)
             if not patient:
-                raise HTTPException(status_code=400, detail="Invalid Patient ID. Please check your Patient ID or register.")
+                raise HTTPException(status_code=400, detail="Invalid Patient ID or Mobile Number. Please check your details or register.")
             
-            dec_dob = decrypt_value(patient.dob)
-            if dec_dob != req.dob.strip():
-                raise HTTPException(status_code=400, detail="Date of Birth mismatch.")
+            target_dob = normalize_dob(req.dob)
+            dec_dob = normalize_dob(decrypt_value(patient.dob) if patient.dob else "")
+            if target_dob and dec_dob and dec_dob != target_dob:
+                raise HTTPException(status_code=400, detail="Date of Birth mismatch with registered records.")
             
-            dec_phone = decrypt_value(patient.phone).replace(" ", "").replace("-", "")
-            req_phone = req.phone.strip().replace(" ", "").replace("-", "")
-            if not (dec_phone == req_phone or dec_phone.endswith(req_phone) or req_phone.endswith(dec_phone)):
+            target_phone = normalize_phone_number(req.phone or "")
+            dec_phone = normalize_phone_number(decrypt_value(patient.phone) if patient.phone else "")
+            if target_phone and dec_phone and target_phone != dec_phone:
                 raise HTTPException(status_code=400, detail="Mobile phone does not match registered records.")
 
             session_info = create_auth_session(flow="login", data={
                 "patient_uid": patient.id,
                 "name": patient.name,
                 "dob": req.dob,
-                "phone": req.phone
+                "phone": decrypt_value(patient.phone) if patient.phone else req.phone
             })
             return {"success": True, **session_info}
         
         elif req.flow == "register":
             # Check duplicate phone
+            target_phone = normalize_phone_number(req.phone)
             existing_patients = db.query(Patient).all()
             for ep in existing_patients:
-                if decrypt_value(ep.phone).replace(" ", "").replace("-", "") == req.phone.strip().replace(" ", "").replace("-", ""):
-                    raise HTTPException(status_code=400, detail=f"A patient with this mobile number is already registered.")
+                ep_phone = normalize_phone_number(decrypt_value(ep.phone) if ep.phone else "")
+                if ep_phone and ep_phone == target_phone:
+                    raise HTTPException(status_code=400, detail="A patient with this mobile number is already registered. Please Sign In.")
 
             session_info = create_auth_session(flow="register", data={
                 "name": req.name.strip(),
