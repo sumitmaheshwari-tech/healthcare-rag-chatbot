@@ -1013,7 +1013,7 @@ async def prewarm_chat(req: PrewarmRequest, background_tasks: BackgroundTasks):
 @app.get("/api/admin/download-db")
 async def download_database_file(key: Optional[str] = None):
     """Download the live production SQLite hospital.db database file."""
-    admin_secret = settings.JWT_SECRET or "medcare-admin"
+    admin_secret = os.getenv("JWT_SECRET", "medcare-admin")
     if key != admin_secret and key != "medcare":
         raise HTTPException(status_code=403, detail="Unauthorized. Provide valid admin key.")
     
@@ -1035,7 +1035,7 @@ async def download_database_file(key: Optional[str] = None):
 @app.get("/api/admin/dashboard", response_class=HTMLResponse)
 async def admin_database_dashboard(key: Optional[str] = None):
     """View the live cloud database snapshot with a web UI."""
-    admin_secret = settings.JWT_SECRET or "medcare-admin"
+    admin_secret = os.getenv("JWT_SECRET", "medcare-admin")
     if key != admin_secret and key != "medcare":
         return HTMLResponse(
             "<h3>🔒 Admin Access Required</h3>"
