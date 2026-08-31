@@ -6,6 +6,18 @@ import math
 from pathlib import Path
 from collections import Counter
 
+# Ensure SSL certificate verification works reliably on Windows Python
+try:
+    import pip_system_certs.wrapt_requests
+except Exception:
+    pass
+try:
+    import certifi
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+except ImportError:
+    pass
+
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
@@ -79,19 +91,92 @@ def _get_embeddings():
     if _cached_embeddings is not None:
         return _cached_embeddings
 
-    if "nemotron" in settings.EMBEDDING_MODEL.lower() or "openrouter" in settings.EMBEDDING_MODEL.lower() or "nvidia" in settings.EMBEDDING_MODEL.lower():
-        from langchain_openai import OpenAIEmbeddings
-        _cached_embeddings = OpenAIEmbeddings(
-            model=settings.EMBEDDING_MODEL,
-            api_key=settings.OPENROUTER_API_KEY,
-            base_url="https://openrouter.ai/api/v1",
-            check_embedding_ctx_length=False,
-            tiktoken_enabled=False,
-            encoding_format="float",
-        )
-    elif "gemini" in settings.EMBEDDING_MODEL.lower() or settings.EMBEDDING_MODEL.startswith("models/"):
+    # 1. NVIDIA Build API (Direct — highest quality, 2048 dims)
+    if settings.NVIDIA_API_KEY and ("nemotron" in settings.EMBEDDING_MODEL.lower() or "nvidia" in settings.EMBEDDING_MODEL.lower()):
+        try:
+            from langchain_nvidia_ai_endpoints import NVIDIAEmbeddings
+            _cached_embeddings = NVIDIAEmbeddings(
+                model=settings.NVIDIA_EMBED_MODEL,
+                api_key=settings.NVIDIA_API_KEY,
+            )
+            print(f"[RAG] Using NVIDIA Build embeddings: {settings.NVIDIA_EMBED_MODEL}")
+            return _cached_embeddings
+        except ImportError:
+            try:
+                from langchain_core.embeddings import Embeddings
+                import requests as _requests
+
+                class NvidiaDirectEmbeddings(Embeddings):
+                    """Direct HTTPS client for NVIDIA asymmetric embeddings with mandatory input_type."""
+                    def __init__(self, model: str, api_key: str):
+                        self.model = model
+                        self.api_key = api_key
+                        self.url = "https://integrate.api.nvidia.com/v1/embeddings"
+                        self.headers = {
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                            "Accept": "application/json",
+                        }
+
+                    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+                        all_embeddings = []
+                        for i in range(0, len(texts), 20):
+                            batch = texts[i:i+20]
+                            payload = {
+                                "input": batch,
+                                "model": self.model,
+                                "input_type": "passage",
+                            }
+                            resp = _requests.post(self.url, headers=self.headers, json=payload, timeout=30)
+                            if resp.status_code != 200:
+                                raise RuntimeError(f"NVIDIA embeddings error {resp.status_code}: {resp.text}")
+                            data = resp.json().get("data", [])
+                            all_embeddings.extend([d["embedding"] for d in sorted(data, key=lambda x: x["index"])])
+                        return all_embeddings
+
+                    def embed_query(self, text: str) -> list[float]:
+                        payload = {
+                            "input": [text],
+                            "model": self.model,
+                            "input_type": "query",
+                        }
+                        resp = _requests.post(self.url, headers=self.headers, json=payload, timeout=30)
+                        if resp.status_code != 200:
+                            raise RuntimeError(f"NVIDIA embeddings error {resp.status_code}: {resp.text}")
+                        data = resp.json().get("data", [])
+                        return data[0]["embedding"]
+
+                _cached_embeddings = NvidiaDirectEmbeddings(
+                    model=settings.NVIDIA_EMBED_MODEL,
+                    api_key=settings.NVIDIA_API_KEY,
+                )
+                print(f"[RAG] Using NVIDIA Build direct embeddings: {settings.NVIDIA_EMBED_MODEL}")
+                return _cached_embeddings
+            except Exception as e:
+                print(f"[RAG WARNING] NVIDIA Build direct embeddings failed ({e}), trying OpenRouter fallback...")
+        except Exception as e:
+            print(f"[RAG WARNING] NVIDIA Build embeddings failed ({e}), trying OpenRouter fallback...")
+
+    # 2. OpenRouter NVIDIA Nemotron (Fallback — 1024 dims)
+    if settings.OPENROUTER_API_KEY and ("nemotron" in settings.EMBEDDING_MODEL.lower() or "openrouter" in settings.EMBEDDING_MODEL.lower() or "nvidia" in settings.EMBEDDING_MODEL.lower()):
+        try:
+            from langchain_openai import OpenAIEmbeddings
+            _cached_embeddings = OpenAIEmbeddings(
+                model="nvidia/nemotron-3-embed-1b:free",
+                api_key=settings.OPENROUTER_API_KEY,
+                base_url="https://openrouter.ai/api/v1",
+                check_embedding_ctx_length=False,
+                tiktoken_enabled=False,
+                encoding_format="float",
+            )
+            print(f"[RAG] Using OpenRouter embeddings: nvidia/nemotron-3-embed-1b:free")
+            return _cached_embeddings
+        except Exception as e:
+            print(f"[RAG WARNING] OpenRouter embeddings failed ({e}), trying next...")
+
+    # 3. Google Gemini Embeddings
+    if "gemini" in settings.EMBEDDING_MODEL.lower() or settings.EMBEDDING_MODEL.startswith("models/"):
         from langchain_google_genai import GoogleGenerativeAIEmbeddings
-        # Clean model name to avoid double-prefixing in Google GenAI SDK
         model_name = settings.EMBEDDING_MODEL
         if model_name.startswith("models/"):
             model_name = model_name.replace("models/", "")
@@ -99,12 +184,15 @@ def _get_embeddings():
             model=model_name,
             google_api_key=settings.GOOGLE_API_KEY,
         )
+        print(f"[RAG] Using Google Gemini embeddings: {model_name}")
     else:
+        # 4. Local HuggingFace (Offline fallback)
         from langchain_community.embeddings import HuggingFaceEmbeddings
         _cached_embeddings = HuggingFaceEmbeddings(
             model_name=settings.EMBEDDING_MODEL,
             model_kwargs={"device": "cpu"},
         )
+        print(f"[RAG] Using local HuggingFace embeddings: {settings.EMBEDDING_MODEL}")
     return _cached_embeddings
 
 

@@ -24,16 +24,21 @@ load_dotenv(dotenv_path=env_path, override=True)
 class Settings:
     """Central configuration for the healthcare RAG chatbot."""
 
-    # Provider setting: 'groq', 'ollama', 'openrouter', or 'gemini'
+    # Provider setting: 'gemini', 'nvidia', 'openrouter', or 'ollama'
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini").lower()
 
-    # Google Gemini API (for LLM — free tier)
-    GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "gemini-flash-latest")
-    # Embeddings (OpenRouter NVIDIA Nemotron / Gemini / Local)
-    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "nvidia/nemotron-3-embed-1b:free")
+    # NVIDIA Build API (Primary — direct NVIDIA GPU cloud)
+    NVIDIA_API_KEY: str = os.getenv("NVIDIA_API_KEY", "")
+    NVIDIA_LLM_MODEL: str = os.getenv("NVIDIA_LLM_MODEL", "nvidia/nemotron-3-super-120b-a12b")
+    NVIDIA_EMBED_MODEL: str = os.getenv("NVIDIA_EMBED_MODEL", "nvidia/nemotron-3-embed-1b")
 
-    # OpenRouter API (NVIDIA Nemotron 3.5 Lightning / Cloud GPUs)
+    # Google Gemini API (Fallback LLM — ultra fast 1.3s)
+    GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "gemini-3.5-flash-lite")
+    # Embeddings (NVIDIA Build / OpenRouter / Gemini / Local)
+    EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "nvidia/nemotron-3-embed-1b")
+
+    # OpenRouter API (Secondary Fallback)
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
     OPENROUTER_MODEL: str = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3.5-lightning:free")
 
@@ -66,6 +71,17 @@ class Settings:
     CACHE_EMBEDDING_TTL: int = int(os.getenv("CACHE_EMBEDDING_TTL", "3600"))  # 1 hour
     CACHE_RETRIEVAL_TTL: int = int(os.getenv("CACHE_RETRIEVAL_TTL", "300"))   # 5 min
     CACHE_RESPONSE_TTL: int = int(os.getenv("CACHE_RESPONSE_TTL", "600"))     # 10 min
+
+    # Admin Notifications (Telegram & Email)
+    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_ADMIN_CHAT_ID: str = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "")
+    SMTP_EMAIL: str = os.getenv("SMTP_EMAIL", "")
+    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+    ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "")
+
+    # Dedicated Telegram Patient Authentication Bot
+    TELEGRAM_AUTH_BOT_TOKEN: str = os.getenv("TELEGRAM_AUTH_BOT_TOKEN", "8652629141:AAFI_hL33SoIeGlPl5k9MVCKCJXSAWs-Zwk")
+    TELEGRAM_AUTH_BOT_USERNAME: str = os.getenv("TELEGRAM_AUTH_BOT_USERNAME", "MedCare_Verification_bot")
 
 
 settings = Settings()

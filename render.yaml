@@ -1,35 +1,41 @@
 services:
   - type: web
-    name: medcare-chatbot
+    name: medcare-assistant
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: cd backend && python -u main.py
+    startCommand: python -u backend/main.py
+    plan: starter
     envVars:
-      - key: PORT
-        value: "8000"
       - key: PYTHON_VERSION
-        value: "3.10.12"
-      - key: LLM_PROVIDER
-        value: "gemini"
-      - key: LLM_MODEL
-        value: "gemini-flash-latest"
-      - key: EMBEDDING_MODEL
-        value: "nvidia/nemotron-3-embed-1b:free"
-      - key: OPENROUTER_MODEL
-        value: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+        value: "3.10.14"
       - key: ENV
         value: "production"
       - key: COOKIE_SECURE
         value: "true"
-      # Set these secrets via Render Dashboard (not in this file):
+      - key: LLM_PROVIDER
+        value: "gemini"
+      - key: LLM_MODEL
+        value: "gemini-3.5-flash-lite"
+      - key: NVIDIA_LLM_MODEL
+        value: "nvidia/nemotron-3-super-120b-a12b"
+      - key: NVIDIA_EMBED_MODEL
+        value: "nvidia/nemotron-3-embed-1b"
+      - key: EMBEDDING_MODEL
+        value: "nvidia/nemotron-3-embed-1b"
+      - key: OPENROUTER_MODEL
+        value: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+      - key: TELEGRAM_AUTH_BOT_USERNAME
+        value: "MedCare_Verification_bot"
+      - key: DATABASE_URL
+        value: "sqlite:///hospital.db"
+      - key: CHROMA_PERSIST_DIR
+        value: "./chroma_db"
+      # Set the following secrets in the Render Dashboard:
       # - GOOGLE_API_KEY
+      # - NVIDIA_API_KEY
       # - OPENROUTER_API_KEY
-      # - DATABASE_URL (auto-set when linking Render PostgreSQL)
-      # - ENCRYPTION_KEY
+      # - TELEGRAM_BOT_TOKEN
+      # - TELEGRAM_ADMIN_CHAT_ID
+      # - TELEGRAM_AUTH_BOT_TOKEN
       # - JWT_SECRET
-
-databases:
-  - name: medcare-db
-    plan: free
-    databaseName: medcare_hospital
-    user: medcare_admin
+      # - ENCRYPTION_KEY

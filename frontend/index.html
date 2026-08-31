@@ -16,7 +16,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 
     <!-- Custom Light Stylesheet with Cache Buster -->
-    <link rel="stylesheet" href="/static/style.css?v=1.3">
+    <link rel="stylesheet" href="/static/style.css?v=3.0">
 </head>
 <body>
     <!-- Calming Background Flows -->
@@ -70,61 +70,102 @@
                 <div id="login-card" class="auth-card-inner">
                     <div class="card-header-icon"><i class="fas fa-lock"></i></div>
                     <h2>Secure Patient Sign In</h2>
-                    <p class="auth-subtitle">Verify your identity using your Name, Patient ID, and Date of Birth.</p>
+                    <p class="auth-subtitle" id="login-subtitle">Sign in using your Patient ID, Date of Birth, and Mobile Number.</p>
                     
                     <form id="login-form" class="auth-form-el">
                         <div id="login-credentials-group">
                             <div class="auth-input-group">
-                                <label for="login-name">Full Name</label>
-                                <input type="text" id="login-name" required placeholder="e.g. Rahul Sharma" autocomplete="name">
-                            </div>
-                            <div class="auth-input-group">
-                                <label for="login-uid">Patient ID (UUID)</label>
-                                <input type="text" id="login-uid" required placeholder="e.g. pat-3f90a1e2" autocomplete="username">
+                                <label for="login-uid">Patient ID</label>
+                                <input type="text" id="login-uid" required placeholder="e.g. pat-bcb9395873bc" autocomplete="username">
                             </div>
                             <div class="auth-input-group">
                                 <label for="login-dob">Date of Birth</label>
                                 <input type="date" id="login-dob" required>
                             </div>
+                            <div class="auth-input-group">
+                                <label for="login-phone">Registered Mobile Number</label>
+                                <div class="phone-input-wrapper">
+                                    <span class="phone-prefix">🇮🇳 +91</span>
+                                    <input type="tel" id="login-phone" required placeholder="9876543210" autocomplete="tel">
+                                </div>
+                            </div>
                         </div>
-                        
+
+                        <!-- Step 2: Telegram OTP Verification -->
                         <div id="login-otp-group" class="auth-input-group hidden">
-                            <label for="login-otp">Enter 6-Digit Verification Code</label>
-                            <input type="text" id="login-otp" maxlength="6" placeholder="e.g. 123456" pattern="\d{6}">
-                            <p class="otp-hint-text" style="font-size: 0.8rem; color: #a0aec0; margin-top: 5px; line-height: 1.3;">
-                                A secure verification code has been sent to your mobile phone. For local development, check the terminal window.
-                            </p>
+                            <div class="telegram-step-box">
+                                <strong><i class="fab fa-telegram" style="color: #0088cc;"></i> Step 1:</strong> Tap below to open our official bot and receive your security code directly in Telegram:
+                            </div>
+                            <a id="login-telegram-link" href="https://t.me/MedCare_Verification_bot" target="_blank" class="telegram-open-btn">
+                                <i class="fab fa-telegram-plane"></i> Tap to Open @MedCare_Verification_bot
+                            </a>
+                            <label for="login-otp" style="margin-top: 6px;">Enter 6-Digit Telegram Code</label>
+                            <input type="text" id="login-otp" class="otp-input-field" maxlength="6" placeholder="• • • • • •" pattern="\d{6}">
+                            <div class="otp-actions">
+                                <span class="otp-hint-text" style="font-size: 0.78rem; color: #718096;">
+                                    Tap START in Telegram to receive code.
+                                </span>
+                                <a href="#" id="login-back-btn" class="otp-back-link">
+                                    <i class="fas fa-arrow-left"></i> Change Details
+                                </a>
+                            </div>
                         </div>
 
                         <div class="auth-error-box hidden" id="login-error"></div>
-                        <button type="submit" id="login-submit-btn" class="auth-btn">Verify Identity</button>
+                        <button type="submit" id="login-submit-btn" class="auth-btn">📲 Get OTP on Telegram</button>
                     </form>
-                    <p class="auth-switch">New patient? <a href="#" id="switch-to-register">Register profile here</a></p>
+                    <p class="auth-switch" id="login-switch-container">New patient? <a href="#" id="switch-to-register">Register profile here</a></p>
                 </div>
 
                 <!-- Registration Card -->
                 <div id="register-card" class="auth-card-inner hidden">
                     <div class="card-header-icon"><i class="fas fa-user-plus"></i></div>
                     <h2>Register Patient Profile</h2>
-                    <p class="auth-subtitle">Create a patient account with minimal details. A secure ID will be generated.</p>
+                    <p class="auth-subtitle" id="register-subtitle">Enter your details. A verification code will be sent to your Telegram.</p>
                     
                     <form id="register-form" class="auth-form-el">
-                        <div class="auth-input-group">
-                            <label for="register-name">Full Name</label>
-                            <input type="text" id="register-name" required placeholder="e.g. Rahul Sharma" autocomplete="name">
+                        <div id="register-credentials-group">
+                            <div class="auth-input-group">
+                                <label for="register-name">Full Name</label>
+                                <input type="text" id="register-name" required placeholder="e.g. Rahul Sharma" autocomplete="name">
+                            </div>
+                            <div class="auth-input-group">
+                                <label for="register-dob">Date of Birth</label>
+                                <input type="date" id="register-dob" required>
+                            </div>
+                            <div class="auth-input-group">
+                                <label for="register-phone">Mobile Phone</label>
+                                <div class="phone-input-wrapper">
+                                    <span class="phone-prefix">🇮🇳 +91</span>
+                                    <input type="tel" id="register-phone" required placeholder="9876543210" autocomplete="tel">
+                                </div>
+                            </div>
                         </div>
-                        <div class="auth-input-group">
-                            <label for="register-dob">Date of Birth</label>
-                            <input type="date" id="register-dob" required>
+
+                        <!-- Step 2: Telegram OTP Verification -->
+                        <div id="register-otp-group" class="auth-input-group hidden">
+                            <div class="telegram-step-box">
+                                <strong><i class="fab fa-telegram" style="color: #0088cc;"></i> Step 1:</strong> Tap below to open our official bot and receive your security code directly in Telegram:
+                            </div>
+                            <a id="register-telegram-link" href="https://t.me/MedCare_Verification_bot" target="_blank" class="telegram-open-btn">
+                                <i class="fab fa-telegram-plane"></i> Tap to Open @MedCare_Verification_bot
+                            </a>
+                            <label for="register-otp" style="margin-top: 6px;">Enter 6-Digit Telegram Code</label>
+                            <input type="text" id="register-otp" class="otp-input-field" maxlength="6" placeholder="• • • • • •" pattern="\d{6}">
+                            <div class="otp-actions">
+                                <span class="otp-hint-text" style="font-size: 0.78rem; color: #718096;">
+                                    Tap START in Telegram to receive code.
+                                </span>
+                                <a href="#" id="register-back-btn" class="otp-back-link">
+                                    <i class="fas fa-arrow-left"></i> Change Details
+                                </a>
+                            </div>
                         </div>
-                        <div class="auth-input-group">
-                            <label for="register-phone">Mobile Phone</label>
-                            <input type="tel" id="register-phone" required placeholder="e.g. +91-9876543210" autocomplete="tel">
-                        </div>
+
                         <div class="auth-error-box hidden" id="register-error"></div>
-                        <button type="submit" class="auth-btn register-btn">Create Profile & Sign In</button>
+                        <button type="submit" id="register-submit-btn" class="auth-btn register-btn">📲 Get OTP on Telegram</button>
                     </form>
-                    <p class="auth-switch">Already registered? <a href="#" id="switch-to-login">Sign In here</a></p>
+                    <p class="auth-switch" id="register-switch-container">Already registered? <a href="#" id="switch-to-login">Sign In here</a></p>
                 </div>
 
             </div>
@@ -178,6 +219,6 @@
     </div>
 
     <!-- Frontend logic client with Cache Buster -->
-    <script src="/static/script.js?v=1.2"></script>
+    <script src="/static/script.js?v=3.1"></script>
 </body>
 </html>

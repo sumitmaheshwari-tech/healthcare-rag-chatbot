@@ -380,6 +380,25 @@ def book_appointment(
         db.add(notif)
         db.commit()
 
+        # Trigger real-time Admin Telegram & Email alert (non-blocking in background)
+        try:
+            from utils.notifier import notify_admin_booking_completed
+            notify_admin_booking_completed({
+                "appointment_id": appt.id,
+                "patient_name": patient_name,
+                "patient_uid": patient_id,
+                "doctor_name": doctor.name,
+                "department": doctor.department.name if doctor.department else "General",
+                "date": target_date.strftime('%A, %B %d, %Y'),
+                "time_slot": time_str or target_time_normalized,
+                "fee": f"{doctor.consultation_fee:.2f}",
+                "invoice_number": bill_no,
+                "location": doctor.location or f"Room {doctor.room_number}, {doctor.block}",
+                "reason": reason or "General Consultation",
+            })
+        except Exception as ne:
+            print(f"[NOTIFIER ERROR] Failed to dispatch admin alert: {ne}")
+
         log_audit_event(
             request_id="tool-call",
             action="BOOK_APPOINTMENT",

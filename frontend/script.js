@@ -17,11 +17,17 @@ let logoutBtn;
 // Auth Overlay Elements
 let authOverlay, loginCard, registerCard;
 let loginForm, registerForm;
-let loginNameInput, loginUidInput, loginDobInput, loginErrorBox;
-let loginCredentialsGroup, loginOtpGroup, loginOtpInput, loginSubmitBtn;
-let registerNameInput, registerDobInput, registerPhoneInput, registerErrorBox;
+let loginUidInput, loginDobInput, loginPhoneInput, loginErrorBox, loginSubmitBtn;
+let loginCredentialsGroup, loginOtpGroup, loginOtpInput, loginTelegramLink, loginBackBtn;
+
+let registerNameInput, registerDobInput, registerPhoneInput, registerErrorBox, registerSubmitBtn;
+let registerCredentialsGroup, registerOtpGroup, registerOtpInput, registerTelegramLink, registerBackBtn;
+
 let switchToRegisterLink, switchToLoginLink;
 let chatInputContainer;
+
+let currentLoginSessionId = '';
+let currentRegisterSessionId = '';
 
 // ── Initialisation ───────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
@@ -44,21 +50,27 @@ document.addEventListener('DOMContentLoaded', () => {
     loginForm           = document.getElementById('login-form');
     registerForm        = document.getElementById('register-form');
     
-    loginNameInput      = document.getElementById('login-name');
     loginUidInput       = document.getElementById('login-uid');
     loginDobInput       = document.getElementById('login-dob');
+    loginPhoneInput     = document.getElementById('login-phone');
     loginErrorBox       = document.getElementById('login-error');
-
-    // New OTP groups
+    loginSubmitBtn      = document.getElementById('login-submit-btn');
     loginCredentialsGroup = document.getElementById('login-credentials-group');
     loginOtpGroup       = document.getElementById('login-otp-group');
     loginOtpInput       = document.getElementById('login-otp');
-    loginSubmitBtn      = document.getElementById('login-submit-btn');
+    loginTelegramLink   = document.getElementById('login-telegram-link');
+    loginBackBtn        = document.getElementById('login-back-btn');
     
     registerNameInput   = document.getElementById('register-name');
     registerDobInput    = document.getElementById('register-dob');
     registerPhoneInput  = document.getElementById('register-phone');
     registerErrorBox    = document.getElementById('register-error');
+    registerSubmitBtn   = document.getElementById('register-submit-btn');
+    registerCredentialsGroup = document.getElementById('register-credentials-group');
+    registerOtpGroup    = document.getElementById('register-otp-group');
+    registerOtpInput    = document.getElementById('register-otp');
+    registerTelegramLink = document.getElementById('register-telegram-link');
+    registerBackBtn     = document.getElementById('register-back-btn');
     
     switchToRegisterLink = document.getElementById('switch-to-register');
     switchToLoginLink    = document.getElementById('switch-to-login');
@@ -461,6 +473,7 @@ function setupEventListeners() {
     });
 }
 
+// ── Phone & Recaptcha Helpers ─────────────────────────────────
 // ── Gated Authentication Form Listeners ───────────────────────
 function setupAuthFormListeners() {
     // 1. Toggle switch between cards
@@ -469,6 +482,7 @@ function setupAuthFormListeners() {
         loginCard.classList.add('hidden');
         registerCard.classList.remove('hidden');
         loginErrorBox.classList.add('hidden');
+        registerErrorBox.classList.add('hidden');
     });
 
     switchToLoginLink.addEventListener('click', (e) => {
@@ -476,73 +490,99 @@ function setupAuthFormListeners() {
         registerCard.classList.add('hidden');
         loginCard.classList.remove('hidden');
         registerErrorBox.classList.add('hidden');
+        loginErrorBox.classList.add('hidden');
     });
 
-    // 2. Submit Login Form (2-Step OTP Authentication)
+    // 2. Telegram Sign In Form (Patient ID + DOB + Mobile Phone -> Telegram OTP)
     loginForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         loginErrorBox.classList.add('hidden');
 
-        const name = loginNameInput.value.trim();
         const uid = loginUidInput.value.trim();
         const dob = loginDobInput.value.trim();
+        const phone = loginPhoneInput.value.trim();
 
-        // Step 1: Check if OTP input is hidden, requesting OTP dispatch
+        // Step 1: Initiate Telegram OTP Session
         if (loginOtpGroup.classList.contains('hidden')) {
+            loginSubmitBtn.disabled = true;
+            loginSubmitBtn.textContent = 'Opening Telegram Gateway...';
+
             try {
-                const res = await fetch(`${API_BASE}/api/patients/verify-request`, {
+                const res = await fetch(`${API_BASE}/api/auth/telegram/initiate`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: name, patient_uid: uid, dob: dob })
+                    body: JSON.stringify({
+                        flow: 'login',
+                        patient_uid: uid,
+                        dob: dob,
+                        phone: phone
+                    })
                 });
 
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
-                    throw new Error(err.detail || 'Identity verification failed. Please check your details.');
+                    throw new Error(err.detail || 'Identity verification failed. Please check your Patient ID, DOB, and Mobile Number.');
                 }
 
-                // Dispatched successfully! Swap form inputs to show OTP code entry
+                const data = await res.json();
+                currentLoginSessionId = data.auth_session_id;
+
+                // Update Telegram Link & automatically open it for the user
+                if (loginTelegramLink && data.telegram_url) {
+                    loginTelegramLink.href = data.telegram_url;
+                    window.open(data.telegram_url, '_blank');
+                }
+
+                // Show OTP input screen
                 loginCredentialsGroup.classList.add('hidden');
                 loginOtpGroup.classList.remove('hidden');
                 loginOtpInput.required = true;
                 loginOtpInput.focus();
+                loginSubmitBtn.disabled = false;
                 loginSubmitBtn.textContent = 'Verify Code & Sign In';
             } catch (err) {
                 loginErrorBox.textContent = err.message;
                 loginErrorBox.classList.remove('hidden');
+                loginSubmitBtn.disabled = false;
+                loginSubmitBtn.textContent = '📲 Get OTP on Telegram';
             }
-        } 
-        // Step 2: OTP Entry is visible, requesting code authentication
+        }
+        // Step 2: Verify Telegram OTP
         else {
             const otp = loginOtpInput.value.trim();
+            loginSubmitBtn.disabled = true;
+            loginSubmitBtn.textContent = 'Verifying Code...';
+
             try {
-                const res = await fetch(`${API_BASE}/api/patients/verify-otp`, {
+                const res = await fetch(`${API_BASE}/api/auth/telegram/verify`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ patient_uid: uid, otp: otp })
+                    body: JSON.stringify({
+                        auth_session_id: currentLoginSessionId,
+                        otp: otp
+                    })
                 });
 
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
-                    throw new Error(err.detail || 'OTP authentication failed.');
+                    throw new Error(err.detail || 'Invalid or expired OTP code. Please tap START in @MedCare_Verification_bot.');
                 }
 
-                // Successful login! Fetch profile and log in
-                const meRes = await fetch(`${API_BASE}/api/patients/me`);
-                if (meRes.ok) {
-                    const meData = await meRes.json();
-                    loginPatient(meData.patient);
-                } else {
-                    throw new Error("Unable to load patient profile after verification.");
-                }
+                const data = await res.json();
+                loginPatient({
+                    patient_uid: data.patient_uid,
+                    name: data.name
+                });
             } catch (err) {
                 loginErrorBox.textContent = err.message;
                 loginErrorBox.classList.remove('hidden');
+                loginSubmitBtn.disabled = false;
+                loginSubmitBtn.textContent = 'Verify Code & Sign In';
             }
         }
     });
 
-    // 3. Submit Register Form
+    // 3. Telegram Register Form (Name + DOB + Mobile Phone -> Telegram OTP)
     registerForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         registerErrorBox.classList.add('hidden');
@@ -551,35 +591,123 @@ function setupAuthFormListeners() {
         const dob = registerDobInput.value.trim();
         const phone = registerPhoneInput.value.trim();
 
-        try {
-            const res = await fetch(`${API_BASE}/api/patients/register`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: name, dob: dob, phone: phone })
-            });
+        // Step 1: Initiate Telegram Registration OTP Session
+        if (registerOtpGroup.classList.contains('hidden')) {
+            registerSubmitBtn.disabled = true;
+            registerSubmitBtn.textContent = 'Opening Telegram Gateway...';
 
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                throw new Error(err.detail || 'Registration failed.');
+            try {
+                const res = await fetch(`${API_BASE}/api/auth/telegram/initiate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        flow: 'register',
+                        name: name,
+                        dob: dob,
+                        phone: phone
+                    })
+                });
+
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    const msg = err.detail || 'Registration failed. Please check your details.';
+                    throw new Error(msg);
+                }
+
+                const data = await res.json();
+                currentRegisterSessionId = data.auth_session_id;
+
+                // Update Telegram link & automatically open it for the user
+                if (registerTelegramLink && data.telegram_url) {
+                    registerTelegramLink.href = data.telegram_url;
+                    window.open(data.telegram_url, '_blank');
+                }
+
+                // Show OTP input screen
+                registerCredentialsGroup.classList.add('hidden');
+                registerOtpGroup.classList.remove('hidden');
+                registerOtpInput.required = true;
+                registerOtpInput.focus();
+                registerSubmitBtn.disabled = false;
+                registerSubmitBtn.textContent = 'Verify Code & Complete Registration';
+            } catch (err) {
+                registerErrorBox.textContent = err.message;
+                registerErrorBox.classList.remove('hidden');
+                registerSubmitBtn.disabled = false;
+                registerSubmitBtn.textContent = '📲 Get OTP on Telegram';
             }
+        }
+        // Step 2: Verify Telegram OTP & Complete Registration
+        else {
+            const otp = registerOtpInput.value.trim();
+            registerSubmitBtn.disabled = true;
+            registerSubmitBtn.textContent = 'Creating Profile...';
 
-            const regData = await res.json();
-            
-            // Show custom registration welcome info
-            loginPatient({
-                patient_uid: regData.patient_uid,
-                name: regData.name,
-                dob: regData.dob
-            });
+            try {
+                const res = await fetch(`${API_BASE}/api/auth/telegram/verify`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        auth_session_id: currentRegisterSessionId,
+                        otp: otp
+                    })
+                });
 
-            // Put explicit info message about new MRN in chat
-            addMessage(`Welcome! Registration successful.\nYour new **Patient ID** is: \`${regData.patient_uid}\`.\n\nPlease save this ID as it is required for future logins.`, 'bot');
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || 'Invalid or expired OTP code. Please tap START in @MedCare_Verification_bot.');
+                }
 
-        } catch (err) {
-            registerErrorBox.textContent = err.message;
-            registerErrorBox.classList.remove('hidden');
+                const regData = await res.json();
+
+                // Log in the patient automatically
+                loginPatient({
+                    patient_uid: regData.patient_uid,
+                    name: regData.name,
+                    dob: regData.dob
+                });
+
+                // Welcome message with new Patient ID
+                addMessage(
+                    `🎉 **Welcome to MedCare Hospital, ${regData.name}!**\n\n` +
+                    `Your identity has been verified via Telegram and your profile is active.\n\n` +
+                    `🔑 **Your Official Patient ID is:** \`${regData.patient_uid}\`\n\n` +
+                    `*(Please save this Patient ID for future sign-ins with your Date of Birth & Mobile Number.)*`,
+                    'bot'
+                );
+            } catch (err) {
+                registerErrorBox.textContent = err.message;
+                registerErrorBox.classList.remove('hidden');
+                registerSubmitBtn.disabled = false;
+                registerSubmitBtn.textContent = 'Verify Code & Complete Registration';
+            }
         }
     });
+
+    // 4. Back Button Handlers
+    if (loginBackBtn) {
+        loginBackBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            loginOtpGroup.classList.add('hidden');
+            loginCredentialsGroup.classList.remove('hidden');
+            loginOtpInput.required = false;
+            loginSubmitBtn.disabled = false;
+            loginSubmitBtn.textContent = '📲 Get OTP on Telegram';
+            loginErrorBox.classList.add('hidden');
+        });
+    }
+
+    if (registerBackBtn) {
+        registerBackBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            registerOtpGroup.classList.add('hidden');
+            registerCredentialsGroup.classList.remove('hidden');
+            registerOtpInput.required = false;
+            registerSubmitBtn.disabled = false;
+            registerSubmitBtn.textContent = '📲 Get OTP on Telegram';
+            registerErrorBox.classList.add('hidden');
+        });
+    }
 }
 
 // ── View Gating & Profile Rendering ───────────────────────────

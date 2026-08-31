@@ -90,14 +90,31 @@ _disabled_providers = set()
 def get_fallback_llm(provider: str):
     """Dynamically instantiate fallback LLM based on provider string."""
     try:
-        if provider == "gemini" and settings.GOOGLE_API_KEY:
+        if provider == "nvidia" and settings.NVIDIA_API_KEY:
+            try:
+                from langchain_nvidia_ai_endpoints import ChatNVIDIA
+                return ChatNVIDIA(
+                    model=settings.NVIDIA_LLM_MODEL,
+                    api_key=settings.NVIDIA_API_KEY,
+                    temperature=0,
+                )
+            except ImportError:
+                from langchain_openai import ChatOpenAI
+                return ChatOpenAI(
+                    model=settings.NVIDIA_LLM_MODEL,
+                    api_key=settings.NVIDIA_API_KEY,
+                    base_url="https://integrate.api.nvidia.com/v1",
+                    temperature=0,
+                    request_timeout=60,
+                )
+        elif provider == "gemini" and settings.GOOGLE_API_KEY:
             from langchain_google_genai import ChatGoogleGenerativeAI
             model_name = settings.LLM_MODEL.replace("models/", "")
             return ChatGoogleGenerativeAI(
                 model=model_name,
                 google_api_key=settings.GOOGLE_API_KEY,
                 temperature=0,
-                timeout=60,
+                timeout=30,
             )
         elif provider == "ollama":
             from langchain_ollama import ChatOllama
@@ -241,7 +258,7 @@ async def agent_node(state, config, primary_llm, tools):
     trimmed_messages = [SystemMessage(content=full_system_prompt)] + trimmed_messages
 
     # ── Multi-Provider Failover Gateway ───────────────────────────────
-    providers_to_try = [settings.LLM_PROVIDER, "gemini", "openrouter"]
+    providers_to_try = [settings.LLM_PROVIDER, "nvidia", "gemini", "openrouter"]
     
     # Remove duplicates while keeping order
     seen = set()
@@ -272,14 +289,15 @@ async def agent_node(state, config, primary_llm, tools):
                 try:
                     response = await asyncio.wait_for(
                         llm_with_tools.ainvoke(payload_messages, config=config),
-                        timeout=45.0
+                        timeout=15.0
                     )
                     if response is None:
                         raise RuntimeError(f"Provider '{provider}' returned empty response")
                     return {"messages": [response]}
                 except asyncio.TimeoutError:
-                    last_error = TimeoutError(f"Provider '{provider}' timed out after 90s")
-                    print(f"[FAILOVER] Provider '{provider}' timed out — moving to next provider")
+                    last_error = TimeoutError(f"Provider '{provider}' timed out after 15s")
+                    print(f"[FAILOVER] Provider '{provider}' timed out after 15s — immediately moving to next provider")
+                    break
                     break  # Don't retry timeouts, move to next provider
                 except Exception as inner_e:
                     last_error = inner_e

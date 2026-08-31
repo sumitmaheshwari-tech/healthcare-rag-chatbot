@@ -72,7 +72,25 @@ async def build_graph():
     ]
 
     # Initialize the LLM dynamically depending on the selected provider
-    if settings.LLM_PROVIDER == "gemini":
+    if settings.LLM_PROVIDER == "nvidia":
+        print(f"[AGENT] Initializing NVIDIA Build model on GPU cloud: {settings.NVIDIA_LLM_MODEL} …")
+        try:
+            from langchain_nvidia_ai_endpoints import ChatNVIDIA
+            llm = ChatNVIDIA(
+                model=settings.NVIDIA_LLM_MODEL,
+                api_key=settings.NVIDIA_API_KEY,
+                temperature=0,
+            )
+        except ImportError:
+            from langchain_openai import ChatOpenAI
+            llm = ChatOpenAI(
+                model=settings.NVIDIA_LLM_MODEL,
+                api_key=settings.NVIDIA_API_KEY,
+                base_url="https://integrate.api.nvidia.com/v1",
+                temperature=0,
+                request_timeout=60,
+            )
+    elif settings.LLM_PROVIDER == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
         print(f"[AGENT] Initializing Gemini model on Google Cloud TPUs: {settings.LLM_MODEL} …")
         model_name = settings.LLM_MODEL.replace("models/", "")
@@ -80,7 +98,7 @@ async def build_graph():
             model=model_name,
             google_api_key=settings.GOOGLE_API_KEY,
             temperature=0,
-            timeout=60,
+            timeout=30,
         )
     elif settings.LLM_PROVIDER == "openrouter":
         from langchain_openai import ChatOpenAI

@@ -14,29 +14,33 @@ env/
 
 # Environment variables (NEVER commit API keys!)
 .env
+.env.local
+.env.production
 
-# Database (regenerated on startup)
+# Database & SQLite files (NEVER commit patient databases!)
 *.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
 hospital.db
+checkpoints.db*
+backend/checkpoints.db*
 
-# ChromaDB (regenerated on startup)
+# ChromaDB vector index
 chroma_db/
 chroma_db_*/
 backend/chroma_db*/
 
-# Logs
+# Logs & scratch
 *.log
+scratch/
 
-# IDE
+# IDE & OS
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# OS
 .DS_Store
 Thumbs.db
 desktop.ini
-
-# Byte-compiled
-*.pyc

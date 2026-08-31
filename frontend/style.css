@@ -844,6 +844,108 @@ body {
     line-height: 1.4;
 }
 
+/* Phone input with country code */
+.phone-input-wrapper {
+    display: flex;
+    align-items: center;
+    border: 1px solid rgba(42, 92, 84, 0.2);
+    border-radius: var(--radius-sm);
+    background: var(--bg-canvas);
+    overflow: hidden;
+    transition: all var(--dur) var(--ease);
+}
+
+.phone-input-wrapper:focus-within {
+    border-color: var(--primary-light);
+    background: #FFFFFF;
+    box-shadow: var(--shadow-focus);
+}
+
+.phone-prefix {
+    padding: 12px 10px 12px 14px;
+    background: rgba(42, 92, 84, 0.06);
+    color: var(--primary);
+    font-weight: 700;
+    font-size: 0.9rem;
+    border-right: 1px solid rgba(42, 92, 84, 0.15);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    user-select: none;
+}
+
+.phone-input-wrapper input {
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    flex: 1;
+    padding: 12px 14px !important;
+}
+
+/* 6-Digit OTP Box */
+.otp-input-field {
+    text-align: center;
+    font-size: 1.4rem !important;
+    font-weight: 700;
+    letter-spacing: 8px;
+    color: var(--primary);
+}
+
+.otp-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.8rem;
+    margin-top: 6px;
+}
+
+.otp-back-link {
+    color: var(--text-secondary);
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.otp-back-link:hover {
+    color: var(--primary);
+    text-decoration: underline;
+}
+
+/* Telegram Action Button */
+.telegram-open-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    background: #0088cc;
+    color: #FFFFFF !important;
+    text-decoration: none;
+    font-size: 0.95rem;
+    font-weight: 700;
+    padding: 14px 16px;
+    border-radius: var(--radius-sm);
+    box-shadow: 0 4px 12px rgba(0, 136, 204, 0.3);
+    transition: all var(--dur) var(--ease);
+    text-align: center;
+    margin: 6px 0 12px;
+}
+
+.telegram-open-btn:hover {
+    background: #0077b5;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(0, 136, 204, 0.4);
+}
+
+.telegram-step-box {
+    background: rgba(0, 136, 204, 0.06);
+    border: 1px dashed rgba(0, 136, 204, 0.3);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    font-size: 0.85rem;
+    color: #2d3748;
+    line-height: 1.45;
+    margin-bottom: 12px;
+}
+
 .hidden {
     display: none !important;
 }

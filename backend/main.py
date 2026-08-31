@@ -6,6 +6,7 @@ import uuid
 import time
 import jwt
 import json
+from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -196,13 +197,26 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    name: str
     patient_uid: str
     dob: str  # YYYY-MM-DD
+    phone: str
 
 
 class OTPVerifyRequest(BaseModel):
     patient_uid: str
+    otp: str
+
+
+class TelegramAuthInitiateRequest(BaseModel):
+    flow: str  # "register" or "login"
+    name: Optional[str] = ""
+    dob: str
+    phone: str
+    patient_uid: Optional[str] = ""
+
+
+class TelegramAuthVerifyRequest(BaseModel):
+    auth_session_id: str
     otp: str
 
 
@@ -492,9 +506,9 @@ async def register_patient(req: RegisterRequest, req_raw: Request, response: Res
         db.close()
 
 
-@app.post("/api/patients/verify-request")
-async def verify_request(req: LoginRequest, req_raw: Request, response: Response):
-    """Verify patient credentials and dispatch an OTP code."""
+@app.post("/api/patients/login")
+async def login_patient(req: LoginRequest, req_raw: Request, response: Response):
+    """Authenticate patient directly using Patient ID, Date of Birth, and Mobile Number."""
     response.headers["Cache-Control"] = "no-store"
     req_id = str(uuid.uuid4())
     ip_addr = req_raw.client.host
@@ -504,38 +518,34 @@ async def verify_request(req: LoginRequest, req_raw: Request, response: Response
     if ip_remaining:
         raise HTTPException(
             status_code=423,
-            detail=f"Too many failed login attempts from this location. Temporarily locked. Try again in {int(ip_remaining // 60) + 1} minutes."
+            detail=f"Too many failed login attempts. Temporarily locked. Try again in {int(ip_remaining // 60) + 1} minutes."
         )
 
     db = get_db()
     try:
         patient = db.query(Patient).filter(Patient.id == req.patient_uid.strip()).first()
 
-        # 2. Check Patient Account Lockout
-        if patient:
-            acc_remaining = check_account_lockout(patient)
-            if acc_remaining:
-                raise HTTPException(
-                    status_code=423,
-                    detail=f"This account is temporarily locked. Try again in {int(acc_remaining.total_seconds() // 60) + 1} minutes."
-                )
-
-        # 3. Validate Name match
-        if not patient or patient.name.strip().lower() != req.name.strip().lower():
+        # 2. Validate Patient ID exists
+        if not patient:
             increment_ip_failed_attempt(ip_addr)
-            if patient:
-                increment_account_failed_attempt(db, patient, ip_addr)
-            
             log_audit_event(
                 request_id=req_id,
-                action="VERIFY_REQUEST",
+                action="LOGIN",
                 status="FAILED",
                 patient_uid=req.patient_uid,
                 ip_address=ip_addr,
                 user_agent=req_raw.headers.get("User-Agent"),
-                details="Verification failed: Name or Patient ID mismatch."
+                details="Login failed: Patient ID not found."
             )
-            raise HTTPException(status_code=400, detail="Invalid Name or Patient ID.")
+            raise HTTPException(status_code=400, detail="Invalid Patient ID. Please check your Patient ID.")
+
+        # 3. Check Account Lockout
+        acc_remaining = check_account_lockout(patient)
+        if acc_remaining:
+            raise HTTPException(
+                status_code=423,
+                detail=f"This account is temporarily locked. Try again in {int(acc_remaining.total_seconds() // 60) + 1} minutes."
+            )
 
         # 4. Validate DOB match
         dec_dob = decrypt_value(patient.dob)
@@ -545,37 +555,196 @@ async def verify_request(req: LoginRequest, req_raw: Request, response: Response
             
             log_audit_event(
                 request_id=req_id,
-                action="VERIFY_REQUEST",
+                action="LOGIN",
                 status="FAILED",
                 patient_uid=req.patient_uid,
                 ip_address=ip_addr,
                 user_agent=req_raw.headers.get("User-Agent"),
-                details="Verification failed: Date of Birth mismatch."
+                details="Login failed: Date of Birth mismatch."
             )
             raise HTTPException(status_code=400, detail="Invalid Date of Birth.")
 
-        # 5. Clear intermediate attempts on credentials match
-        clear_ip_attempts(ip_addr)
-        patient.failed_login_attempts = 0
-        patient.locked_until = None
-        db.commit()
+        # 5. Validate Mobile Phone match
+        dec_phone = decrypt_value(patient.phone).replace(" ", "").replace("-", "")
+        req_phone = req.phone.strip().replace(" ", "").replace("-", "")
+        if not (dec_phone == req_phone or dec_phone.endswith(req_phone) or req_phone.endswith(dec_phone)):
+            increment_ip_failed_attempt(ip_addr)
+            increment_account_failed_attempt(db, patient, ip_addr)
+            
+            log_audit_event(
+                request_id=req_id,
+                action="LOGIN",
+                status="FAILED",
+                patient_uid=req.patient_uid,
+                ip_address=ip_addr,
+                user_agent=req_raw.headers.get("User-Agent"),
+                details="Login failed: Mobile phone mismatch."
+            )
+            raise HTTPException(status_code=400, detail="Mobile phone number does not match registered records.")
 
-        # 6. Generate and send secure OTP
-        sent = create_and_send_patient_otp(db, patient, ip_addr)
-        if not sent:
-            raise HTTPException(status_code=500, detail="Failed to deliver authentication code SMS.")
+        # 6. Clear failed attempts on credentials match
+        clear_ip_attempts(ip_addr)
+        clear_account_attempts(db, patient)
+
+        # 7. Issue secure JWT session tokens
+        access_token, refresh_token = create_tokens(patient.id)
+        set_jwt_cookies(response, access_token, refresh_token)
 
         log_audit_event(
             request_id=req_id,
-            action="VERIFY_REQUEST",
+            action="LOGIN",
             status="SUCCESS",
             patient_uid=patient.id,
             ip_address=ip_addr,
             user_agent=req_raw.headers.get("User-Agent"),
-            details=f"Verification request successful. OTP sent for {patient.name}."
+            details=f"Patient {patient.name} logged in successfully."
         )
 
-        return {"success": True, "message": "Verification code sent."}
+        return {
+            "success": True, 
+            "message": "Signed in successfully.",
+            "patient_uid": patient.id,
+            "name": patient.name
+        }
+    finally:
+        db.close()
+
+
+@app.post("/api/auth/telegram/initiate")
+async def initiate_telegram_auth(req: TelegramAuthInitiateRequest, req_raw: Request):
+    """Initiate a Telegram OTP authentication session for @MedCare_Verification_bot."""
+    from services.telegram_auth_service import create_auth_session
+    
+    db = get_db()
+    try:
+        if req.flow == "login":
+            # Validate login credentials against database
+            patient = db.query(Patient).filter(Patient.id == req.patient_uid.strip()).first()
+            if not patient:
+                raise HTTPException(status_code=400, detail="Invalid Patient ID. Please check your Patient ID or register.")
+            
+            dec_dob = decrypt_value(patient.dob)
+            if dec_dob != req.dob.strip():
+                raise HTTPException(status_code=400, detail="Date of Birth mismatch.")
+            
+            dec_phone = decrypt_value(patient.phone).replace(" ", "").replace("-", "")
+            req_phone = req.phone.strip().replace(" ", "").replace("-", "")
+            if not (dec_phone == req_phone or dec_phone.endswith(req_phone) or req_phone.endswith(dec_phone)):
+                raise HTTPException(status_code=400, detail="Mobile phone does not match registered records.")
+
+            session_info = create_auth_session(flow="login", data={
+                "patient_uid": patient.id,
+                "name": patient.name,
+                "dob": req.dob,
+                "phone": req.phone
+            })
+            return {"success": True, **session_info}
+        
+        elif req.flow == "register":
+            # Check duplicate phone
+            existing_patients = db.query(Patient).all()
+            for ep in existing_patients:
+                if decrypt_value(ep.phone).replace(" ", "").replace("-", "") == req.phone.strip().replace(" ", "").replace("-", ""):
+                    raise HTTPException(status_code=400, detail=f"A patient with this mobile number is already registered.")
+
+            session_info = create_auth_session(flow="register", data={
+                "name": req.name.strip(),
+                "dob": req.dob.strip(),
+                "phone": req.phone.strip()
+            })
+            return {"success": True, **session_info}
+        else:
+            raise HTTPException(status_code=400, detail="Invalid auth flow requested.")
+    finally:
+        db.close()
+
+
+@app.post("/api/auth/telegram/verify")
+async def verify_telegram_auth(req: TelegramAuthVerifyRequest, req_raw: Request, response: Response):
+    """Verify the 6-digit Telegram OTP and issue secure JWT session cookies."""
+    from services.telegram_auth_service import verify_session_otp
+    
+    result = verify_session_otp(req.auth_session_id, req.otp)
+    if not result:
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code. Please tap START on @MedCare_Verification_bot to get your code.")
+
+    flow = result["flow"]
+    p_data = result["data"]
+    req_id = str(uuid.uuid4())
+    ip_addr = req_raw.client.host
+
+    db = get_db()
+    try:
+        if flow == "register":
+            new_uid = f"pat-{uuid.uuid4().hex[:12]}"
+            age = 0
+            try:
+                dob_date = datetime.strptime(p_data["dob"], "%Y-%m-%d")
+                age = (datetime.utcnow() - dob_date).days // 365
+            except Exception:
+                pass
+
+            new_pat = Patient(
+                id=new_uid,
+                name=p_data["name"],
+                dob=encrypt_value(p_data["dob"]),
+                age=age,
+                gender="Unknown",
+                phone=encrypt_value(p_data["phone"]),
+                email=encrypt_value(""),
+                address=encrypt_value(""),
+                blood_group=encrypt_value(""),
+                emergency_contact=encrypt_value("")
+            )
+            db.add(new_pat)
+            db.commit()
+
+            log_audit_event(
+                request_id=req_id,
+                action="REGISTER_TELEGRAM_OTP",
+                status="SUCCESS",
+                patient_uid=new_uid,
+                ip_address=ip_addr,
+                user_agent=req_raw.headers.get("User-Agent"),
+                details=f"Registered patient '{new_pat.name}' via Telegram Auth Bot."
+            )
+
+            access_token, refresh_token = create_tokens(new_uid)
+            set_jwt_cookies(response, access_token, refresh_token)
+
+            return {
+                "success": True,
+                "patient_uid": new_uid,
+                "name": new_pat.name,
+                "dob": p_data["dob"]
+            }
+
+        elif flow == "login":
+            patient = db.query(Patient).filter(Patient.id == p_data["patient_uid"]).first()
+            if not patient:
+                raise HTTPException(status_code=400, detail="Patient profile not found.")
+
+            clear_ip_attempts(ip_addr)
+            clear_account_attempts(db, patient)
+
+            access_token, refresh_token = create_tokens(patient.id)
+            set_jwt_cookies(response, access_token, refresh_token)
+
+            log_audit_event(
+                request_id=req_id,
+                action="LOGIN_TELEGRAM_OTP",
+                status="SUCCESS",
+                patient_uid=patient.id,
+                ip_address=ip_addr,
+                user_agent=req_raw.headers.get("User-Agent"),
+                details=f"Patient {patient.name} logged in via Telegram Auth Bot."
+            )
+
+            return {
+                "success": True,
+                "patient_uid": patient.id,
+                "name": patient.name
+            }
     finally:
         db.close()
 
@@ -747,7 +916,9 @@ async def health_check():
 
     # 3. LLM Configuration Check
     from config import settings as _s
-    if _s.GOOGLE_API_KEY:
+    if _s.LLM_PROVIDER == "nvidia" and _s.NVIDIA_API_KEY:
+        health_status["primary_llm"] = f"configured (NVIDIA: {_s.NVIDIA_LLM_MODEL})"
+    elif _s.LLM_PROVIDER == "gemini" and _s.GOOGLE_API_KEY:
         health_status["primary_llm"] = f"configured (Gemini: {_s.LLM_MODEL})"
     elif _s.OPENROUTER_API_KEY:
         health_status["primary_llm"] = f"configured (OpenRouter: {_s.OPENROUTER_MODEL})"
@@ -793,17 +964,28 @@ async def prewarm_chat(req: PrewarmRequest, background_tasks: BackgroundTasks):
     return {"status": "prewarming"}
 
 
-# ── Static files & frontend serving ──────────────────────────────────
+# ── Static files & frontend serving (No-Cache headers for live updates) ──
 frontend_dir = BACKEND_DIR.parent / "frontend"
 if frontend_dir.exists():
-    app.mount("/static", StaticFiles(directory=str(frontend_dir)), name="static")
+    class NoCacheStaticFiles(StaticFiles):
+        def is_not_modified(self, response_headers, request_headers) -> bool:
+            return False
+
+    app.mount("/static", NoCacheStaticFiles(directory=str(frontend_dir)), name="static")
 
 
 @app.get("/")
 async def serve_frontend():
     index = frontend_dir / "index.html"
     if index.exists():
-        return FileResponse(str(index))
+        return FileResponse(
+            str(index),
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0"
+            }
+        )
     return {"message": "Frontend not found. API is running at /api/"}
 
 
