@@ -14,33 +14,42 @@ from database.encrypt import decrypt_value
 
 def inspect():
     db = get_db()
-    print("=" * 85)
-    print("  [MedCare Hospital Database Snapshot]")
-    print("=" * 85)
+    print("=" * 95)
+    print("  🏥 [MedCare Hospital Database — Live Decrypted Records] 🏥")
+    print("=" * 95)
 
     try:
-        # 1. Patients
+        # 1. Patients Detailed
         patients = db.query(Patient).all()
-        print(f"\n[*] PATIENTS ({len(patients)} registered):")
-        print("-" * 85)
-        for p in patients:
-            phone = decrypt_value(p.phone) if p.phone else "N/A"
+        print(f"\n👤 [1] PATIENT PROFILES ({len(patients)} registered)")
+        print("-" * 95)
+        for idx, p in enumerate(patients, 1):
             dob = decrypt_value(p.dob) if p.dob else "N/A"
-            print(f" • ID: {p.id:<18} | Name: {p.name:<20} | DOB: {dob:<10} | Phone: {phone}")
+            phone = decrypt_value(p.phone) if p.phone else "N/A"
+            email = decrypt_value(p.email) if p.email else "N/A"
+            blood = decrypt_value(p.blood_group) if p.blood_group else "N/A"
+            addr = decrypt_value(p.address) if p.address else "N/A"
+            emer = decrypt_value(p.emergency_contact) if p.emergency_contact else "N/A"
+            status = "🔒 LOCKED" if (p.locked_until and p.locked_until.timestamp() > 0) else "🟢 ACTIVE"
+
+            print(f"[{idx:>2}] ID: {p.id:<18} | Name: {p.name:<20} | Status: {status}")
+            print(f"     ├─ DOB: {dob:<12} | Phone: {phone:<15} | Blood: {blood:<4} | Email: {email}")
+            if addr != "N/A" or emer != "N/A":
+                print(f"     └─ Address: {addr} | Emergency: {emer}")
 
         # 2. Doctors
         doctors = db.query(Doctor).all()
-        print(f"\n[*] DOCTORS ({len(doctors)} active):")
-        print("-" * 85)
+        print(f"\n🩺 [2] ACTIVE DOCTORS ({len(doctors)} total)")
+        print("-" * 95)
         for d in doctors:
             dept_name = d.department.name if d.department else "General"
             fee = d.consultation_fee or 0
-            print(f" • ID: {d.id:<4} | Dr. {d.name:<20} | Dept: {dept_name:<18} | Fee: ₹{fee}")
+            print(f" • ID: {d.id:<3} | Dr. {d.name:<20} | Dept: {dept_name:<16} | Fee: ₹{fee:<6} | Room: {d.location or 'Main Block'}")
 
         # 3. Appointments
         appointments = db.query(Appointment).all()
-        print(f"\n[*] APPOINTMENTS ({len(appointments)} total):")
-        print("-" * 85)
+        print(f"\n📅 [3] APPOINTMENTS ({len(appointments)} total)")
+        print("-" * 95)
         if not appointments:
             print("   (No appointments booked yet)")
         for a in appointments:
@@ -50,12 +59,12 @@ def inspect():
             appt_date = str(a.date) if hasattr(a, 'date') else "N/A"
             appt_time = str(a.time) if hasattr(a, 'time') else "N/A"
             uid = a.appointment_uid if hasattr(a, 'appointment_uid') else str(a.id)
-            print(f" • UID: {uid:<12} | Patient: {pat_name:<16} | Dr. {doc_name:<14} | Date: {appt_date} @ {appt_time} | Status: {status}")
+            print(f" • UID: {uid:<14} | Patient: {pat_name:<18} | Dr. {doc_name:<16} | Slot: {appt_date} @ {appt_time:<5} | Status: {status}")
 
         # 4. Billing Records
         bills = db.query(Billing).all()
-        print(f"\n[*] BILLING RECORDS ({len(bills)} total):")
-        print("-" * 85)
+        print(f"\n💳 [4] BILLING RECORDS ({len(bills)} total)")
+        print("-" * 95)
         if not bills:
             print("   (No billing records found)")
         for b in bills:
@@ -64,18 +73,19 @@ def inspect():
             bill_no = b.bill_number if hasattr(b, 'bill_number') else str(b.id)
             amount = b.amount or 0
             paid = b.paid or 0
-            print(f" • Bill No: {bill_no:<12} | Patient: {pat_name:<16} | Amount: ₹{amount:<6} | Paid: ₹{paid:<6} | Status: {status}")
+            pending = b.pending if b.pending is not None else (amount - paid)
+            print(f" • Bill: {bill_no:<16} | Patient: {pat_name:<18} | Total: ₹{amount:<6} | Paid: ₹{paid:<6} | Due: ₹{pending:<6} | Status: {status}")
 
         # 5. Recent Audit Activity
-        logs = db.query(AuditLog).order_by(AuditLog.timestamp.desc()).limit(8).all()
-        print(f"\n[*] RECENT AUDIT LOGS (Last 8 events):")
-        print("-" * 85)
+        logs = db.query(AuditLog).order_by(AuditLog.timestamp.desc()).limit(6).all()
+        print(f"\n🛡️ [5] RECENT AUDIT LOGS (Last 6 security events)")
+        print("-" * 95)
         for l in logs:
             print(f" • [{l.timestamp.strftime('%Y-%m-%d %H:%M:%S')}] {l.action:<22} | Status: {l.status:<8} | Patient: {l.patient_uid or 'N/A'}")
 
     finally:
         db.close()
-        print("\n" + "=" * 85)
+        print("\n" + "=" * 95)
 
 if __name__ == "__main__":
     inspect()
