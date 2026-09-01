@@ -477,3 +477,46 @@ def set_telegram_webhook(base_url: str) -> dict:
         return {"webhook_url": webhook_url, "telegram_response": r.json()}
     except Exception as e:
         return {"error": str(e)}
+
+
+def send_telegram_booking_alert(booking_data: dict) -> bool:
+    """Send an immediate HTML push notification to the Admin Telegram chat."""
+    token = settings.TELEGRAM_BOT_TOKEN
+    chat_id = settings.TELEGRAM_ADMIN_CHAT_ID
+    if not token or not chat_id:
+        print("[TELEGRAM ALERT WARNING] Missing TELEGRAM_BOT_TOKEN or TELEGRAM_ADMIN_CHAT_ID")
+        return False
+
+    text = (
+        f"🚨 <b>NEW APPOINTMENT BOOKED!</b>\n\n"
+        f"👤 <b>Patient Name:</b> {booking_data.get('patient_name', 'N/A')}\n"
+        f"📱 <b>Patient Phone:</b> {booking_data.get('patient_phone', 'N/A')}\n"
+        f"🩺 <b>Doctor:</b> {booking_data.get('doctor_name', 'N/A')}\n"
+        f"🏥 <b>Department:</b> {booking_data.get('department', 'General')}\n"
+        f"📅 <b>Date:</b> {booking_data.get('date', 'N/A')}\n"
+        f"⏰ <b>Time:</b> {booking_data.get('time', 'N/A')}\n"
+        f"📝 <b>Reason:</b> {booking_data.get('reason', 'Consultation')}\n"
+        f"💰 <b>Consultation Fee:</b> ₹{booking_data.get('fee', 0):.0f}\n"
+        f"🧾 <b>Invoice:</b> <code>{booking_data.get('invoice_number', 'N/A')}</code>\n"
+        f"🔑 <b>Appointment UID:</b> <code>{booking_data.get('appointment_uid', 'N/A')}</code>\n\n"
+        f"⏱ <i>Received via MedCare Live Chatbot</i>"
+    )
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML"
+    }
+
+    try:
+        r = requests.post(url, json=payload, timeout=10)
+        if r.status_code == 200:
+            print(f"[TELEGRAM ALERT] Push alert sent successfully to admin {chat_id}!")
+            return True
+        else:
+            print(f"[TELEGRAM ALERT ERROR] HTTP {r.status_code}: {r.text}")
+            return False
+    except Exception as e:
+        print(f"[TELEGRAM ALERT EXCEPTION] {e}")
+        return False

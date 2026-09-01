@@ -195,12 +195,12 @@ async def agent_node(state, config, primary_llm, tools):
     elif classified_intent == "BOOKING_INTENT":
         if auth_uid:
             intent_directive = (
-                "\n\nIMPORTANT: The user wants to manage appointments. Follow the APPOINTMENT BOOKING GUIDELINES "
-                "in the system prompt — you MUST go through all 7 steps (understand concern, recommend doctor, share "
-                "doctor info, ask preferred date, check availability, present slots, confirm & book). "
-                "Do NOT skip steps or book directly. First ask about their health concern if they haven't shared it. "
-                "Use ONLY appointment-related tools (book_appointment, cancel_appointment, get_patient_appointments, "
-                "check_doctor_availability). DO NOT call search_hospital_knowledge."
+                f"\n\n=== APPOINTMENT BOOKING DIRECTIVE ===\n"
+                f"The patient is authenticated with Patient UID '{auth_uid}'.\n"
+                f"• When the user specifies or confirms a doctor, date, and time slot, YOU MUST IMMEDIATELY CALL the `book_appointment` tool with patient_id='{auth_uid}'.\n"
+                f"• When the user asks for availability for a doctor or department, call `check_doctor_availability`.\n"
+                f"• CRITICAL: NEVER output a confirmation message or simulate a booking in text without ACTUALLY calling the `book_appointment` tool!\n"
+                f"• Use ONLY appointment tools (book_appointment, check_doctor_availability, cancel_appointment, get_patient_appointments)."
             )
         else:
             intent_directive = (
