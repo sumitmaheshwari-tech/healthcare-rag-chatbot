@@ -1042,7 +1042,7 @@ async def prewarm_chat(req: PrewarmRequest, background_tasks: BackgroundTasks):
     return {"status": "prewarming"}
 
 
-# ── Admin Live Database Dashboard & Backup Downloader ────────────────
+# ── Admin Live Database Dashboard & Real-Time Data API ───────────────
 @app.get("/api/admin/download-db")
 async def download_database_file(key: Optional[str] = None):
     """Download the live production SQLite hospital.db database file."""
@@ -1052,8 +1052,9 @@ async def download_database_file(key: Optional[str] = None):
     
     db_path = BACKEND_DIR / "hospital.db"
     if not db_path.exists():
-        # Check root or parent
         db_path = BACKEND_DIR.parent / "hospital.db"
+    if not db_path.exists():
+        db_path = Path("/tmp/hospital.db")
     
     if not db_path.exists():
         raise HTTPException(status_code=404, detail="Database file not found on disk.")
@@ -1061,13 +1062,112 @@ async def download_database_file(key: Optional[str] = None):
     return FileResponse(
         str(db_path),
         media_type="application/x-sqlite3",
-        filename="hospital_production_backup.db"
+        filename=f"hospital_live_backup_{int(time.time())}.db",
+        headers={"Cache-Control": "no-store"}
     )
+
+
+@app.get("/api/admin/data")
+async def get_admin_live_data(key: Optional[str] = None, response: Response = None):
+    """Real-time JSON endpoint for live admin dashboard polling."""
+    if response:
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    
+    admin_secret = os.getenv("JWT_SECRET", "medcare-admin")
+    if key != admin_secret and key != "medcare":
+        raise HTTPException(status_code=403, detail="Unauthorized. Provide valid admin key.")
+
+    db = get_db()
+    try:
+        from database.models import Patient, Doctor, Appointment, Billing, AuditLog
+        from database.encrypt import decrypt_value
+
+        all_patients = db.query(Patient).all()
+        all_doctors = db.query(Doctor).all()
+        all_appointments = db.query(Appointment).order_by(Appointment.id.desc()).all()
+        all_bills = db.query(Billing).order_by(Billing.id.desc()).all()
+        all_audits = db.query(AuditLog).order_by(AuditLog.timestamp.desc()).limit(20).all()
+
+        pat_map = {p.id: p for p in all_patients}
+        doc_map = {d.id: d for d in all_doctors}
+
+        patients_list = []
+        for p in all_patients:
+            phone = decrypt_value(p.phone) if p.phone else "N/A"
+            dob = decrypt_value(p.dob) if p.dob else "N/A"
+            patients_list.append({
+                "id": p.id,
+                "name": p.name,
+                "dob": dob,
+                "phone": phone,
+                "created_at": p.created_at.strftime("%Y-%m-%d %H:%M:%S") if p.created_at else "N/A"
+            })
+
+        appointments_list = []
+        for a in all_appointments:
+            pat = pat_map.get(a.patient_id)
+            doc = doc_map.get(a.doctor_id)
+            pat_name = pat.name if pat else (a.patient.name if a.patient else a.patient_id)
+            doc_name = doc.name if doc else (a.doctor.name if a.doctor else f"Doctor #{a.doctor_id}")
+            status = a.status.value if hasattr(a.status, "value") else str(a.status)
+            
+            appointments_list.append({
+                "uid": a.appointment_uid,
+                "patient_name": pat_name,
+                "patient_id": a.patient_id,
+                "doctor_name": f"Dr. {doc_name}",
+                "date": str(a.date),
+                "time": str(a.time),
+                "status": status,
+                "reason": a.reason or "General Consultation",
+                "created_at": a.created_at.strftime("%Y-%m-%d %H:%M:%S") if a.created_at else "N/A"
+            })
+
+        bills_list = []
+        for b in all_bills:
+            pat = pat_map.get(b.patient_id)
+            pat_name = pat.name if pat else b.patient_id
+            status = b.status.value if hasattr(b.status, "value") else str(b.status)
+            bills_list.append({
+                "bill_number": b.bill_number,
+                "patient_name": pat_name,
+                "amount": b.amount,
+                "paid": b.paid,
+                "status": status,
+                "created_at": b.created_at.strftime("%Y-%m-%d %H:%M:%S") if b.created_at else "N/A"
+            })
+
+        audits_list = []
+        for l in all_audits:
+            audits_list.append({
+                "time": l.timestamp.strftime("%H:%M:%S"),
+                "action": l.action,
+                "status": l.status,
+                "patient_uid": l.patient_uid or "-",
+                "ip": l.ip_address or "-"
+            })
+
+        return {
+            "success": True,
+            "server_time": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
+            "counts": {
+                "patients": len(patients_list),
+                "appointments": len(appointments_list),
+                "bills": len(bills_list),
+                "doctors": len(all_doctors)
+            },
+            "patients": patients_list,
+            "appointments": appointments_list,
+            "bills": bills_list,
+            "audits": audits_list
+        }
+    finally:
+        db.close()
 
 
 @app.get("/api/admin/dashboard", response_class=HTMLResponse)
 async def admin_database_dashboard(key: Optional[str] = None):
-    """View the live cloud database snapshot with a web UI."""
+    """View the live cloud database snapshot with automated real-time 3-second live sync."""
     admin_secret = os.getenv("JWT_SECRET", "medcare-admin")
     if key != admin_secret and key != "medcare":
         return HTMLResponse(
@@ -1076,117 +1176,368 @@ async def admin_database_dashboard(key: Optional[str] = None):
             status_code=403
         )
 
-    db = get_db()
-    try:
-        from database.models import Patient, Doctor, Appointment, Billing, AuditLog
-        from database.encrypt import decrypt_value
-
-        patients = db.query(Patient).all()
-        doctors = db.query(Doctor).all()
-        appointments = db.query(Appointment).order_by(Appointment.id.desc()).all()
-        bills = db.query(Billing).order_by(Billing.id.desc()).all()
-        audit_logs = db.query(AuditLog).order_by(AuditLog.timestamp.desc()).limit(15).all()
-
-        patient_rows = ""
-        for p in patients:
-            phone = decrypt_value(p.phone) if p.phone else "N/A"
-            dob = decrypt_value(p.dob) if p.dob else "N/A"
-            patient_rows += f"<tr><td><code>{p.id}</code></td><td><b>{p.name}</b></td><td>{dob}</td><td>{phone}</td><td>{p.created_at.strftime('%Y-%m-%d %H:%M') if p.created_at else 'N/A'}</td></tr>"
-
-        appt_rows = ""
-        for a in appointments:
-            pat_name = a.patient.name if a.patient else "Unknown"
-            doc_name = a.doctor.name if a.doctor else "Unknown"
-            status = a.status.value if hasattr(a.status, 'value') else str(a.status)
-            badge_color = "#10b981" if status == "booked" else "#6b7280"
-            appt_rows += f"<tr><td><code>{a.appointment_uid}</code></td><td><b>{pat_name}</b></td><td>Dr. {doc_name}</td><td>{a.date} @ {a.time}</td><td><span style='background:{badge_color};color:white;padding:2px 8px;border-radius:12px;font-size:12px;'>{status.upper()}</span></td><td>{a.reason or 'Consultation'}</td></tr>"
-
-        bill_rows = ""
-        for b in bills:
-            pat_name = b.patient.name if b.patient else "Unknown"
-            status = b.status.value if hasattr(b.status, 'value') else str(b.status)
-            bill_rows += f"<tr><td><code>{b.bill_number}</code></td><td>{pat_name}</td><td>₹{b.amount}</td><td>₹{b.paid}</td><td>{status.upper()}</td></tr>"
-
-        audit_rows = ""
-        for l in audit_logs:
-            audit_rows += f"<tr><td>{l.timestamp.strftime('%H:%M:%S')}</td><td><b>{l.action}</b></td><td>{l.status}</td><td><code>{l.patient_uid or '-'}</code></td><td>{l.ip_address}</td></tr>"
-
-        html_content = f"""<!DOCTYPE html>
-<html>
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
 <head>
-    <title>MedCare Hospital — Live Cloud Database Dashboard</title>
+    <title>🏥 MedCare Hospital — Live Production Command Center</title>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏥</text></svg>">
     <style>
-        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; color: #1e293b; margin: 0; padding: 24px; }}
-        .header {{ display: flex; justify-content: space-between; align-items: center; background: white; padding: 20px 24px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 24px; }}
-        h1 {{ margin: 0; font-size: 24px; color: #0f172a; }}
-        .download-btn {{ background: #059669; color: white; padding: 10px 18px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px; display: inline-flex; align-items: center; gap: 8px; }}
-        .metrics {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }}
-        .metric-card {{ background: white; padding: 18px; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }}
-        .metric-card h3 {{ margin: 0 0 6px; font-size: 13px; color: #64748b; text-transform: uppercase; }}
-        .metric-card .num {{ font-size: 28px; font-weight: 700; color: #0284c7; }}
-        .section {{ background: white; padding: 20px; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-bottom: 24px; }}
-        h2 {{ margin-top: 0; font-size: 18px; color: #334155; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px; }}
-        table {{ width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }}
-        th, td {{ padding: 10px 12px; text-align: left; border-bottom: 1px solid #f1f5f9; }}
-        th {{ background: #f8fafc; color: #475569; font-weight: 600; }}
-        tr:hover {{ background: #f8fafc; }}
-        code {{ background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-size: 12px; }}
+        :root {{
+            --bg: #0f172a;
+            --card-bg: #1e293b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent: #0ea5e9;
+            --accent-green: #10b981;
+            --border: #334155;
+        }}
+        * {{ box-sizing: border-box; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text-main);
+            margin: 0;
+            padding: 24px;
+            min-height: 100vh;
+        }}
+        .header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--card-bg);
+            padding: 20px 24px;
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+            gap: 16px;
+        }}
+        .title-group {{ display: flex; align-items: center; gap: 12px; }}
+        .badge-live {{
+            background: rgba(16, 185, 129, 0.2);
+            color: #34d399;
+            border: 1px solid #10b981;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }}
+        .pulse-dot {{
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #10b981;
+            box-shadow: 0 0 0 rgba(16, 185, 129, 0.7);
+            animation: pulse 1.8s infinite;
+        }}
+        @keyframes pulse {{
+            0% {{ box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }}
+            70% {{ box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }}
+            100% {{ box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }}
+        }}
+        .actions {{ display: flex; gap: 10px; align-items: center; }}
+        .btn {{
+            padding: 9px 16px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 13px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s;
+        }}
+        .btn-refresh {{ background: #334155; color: white; }}
+        .btn-refresh:hover {{ background: #475569; }}
+        .btn-download {{ background: #059669; color: white; }}
+        .btn-download:hover {{ background: #047857; }}
+        .metrics {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }}
+        .metric-card {{
+            background: var(--card-bg);
+            padding: 18px 20px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }}
+        .metric-card h3 {{
+            margin: 0 0 8px;
+            font-size: 13px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }}
+        .metric-card .num {{
+            font-size: 32px;
+            font-weight: 800;
+            color: var(--accent);
+        }}
+        .section {{
+            background: var(--card-bg);
+            padding: 20px 24px;
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            margin-bottom: 24px;
+        }}
+        .section-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 14px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 12px;
+        }}
+        h2 {{ margin: 0; font-size: 18px; font-weight: 700; color: #e2e8f0; }}
+        .search-box {{
+            background: #0f172a;
+            border: 1px solid var(--border);
+            padding: 7px 12px;
+            border-radius: 6px;
+            color: white;
+            font-size: 13px;
+            width: 220px;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13.5px;
+        }}
+        th, td {{
+            padding: 12px 14px;
+            text-align: left;
+            border-bottom: 1px solid #334155;
+        }}
+        th {{
+            background: #0f172a;
+            color: #94a3b8;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 11.5px;
+            letter-spacing: 0.5px;
+        }}
+        tr:hover {{ background: rgba(255, 255, 255, 0.03); }}
+        code {{
+            background: #0f172a;
+            color: #38bdf8;
+            padding: 3px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+            border: 1px solid #1e293b;
+        }}
+        .badge {{
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }}
+        .badge-booked {{ background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid #10b981; }}
+        .badge-pending {{ background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid #f59e0b; }}
+        .badge-completed {{ background: rgba(14, 165, 233, 0.2); color: #38bdf8; border: 1px solid #0ea5e9; }}
+        .empty-row {{ text-align: center; color: var(--text-muted); padding: 24px; font-style: italic; }}
     </style>
 </head>
 <body>
     <div class="header">
-        <div>
-            <h1>🏥 MedCare Hospital — Live Database Snapshot</h1>
-            <p style="margin: 4px 0 0; color: #64748b; font-size: 13px;">Real-Time Production Data Viewer</p>
+        <div class="title-group">
+            <h1 style="margin:0;font-size:22px;">🏥 MedCare Hospital — Live Control Center</h1>
+            <span class="badge-live"><span class="pulse-dot"></span> LIVE SYNC (3s)</span>
         </div>
-        <a href="/api/admin/download-db?key={key}" class="download-btn">⬇️ Download SQLite (.db) File</a>
+        <div class="actions">
+            <span id="sync-timer" style="font-size:12px;color:var(--text-muted);margin-right:8px;">Updated: Just now</span>
+            <button class="btn btn-refresh" onclick="fetchLiveData(true)">🔄 Sync Now</button>
+            <a href="/api/admin/download-db?key={key}" class="btn btn-download">⬇️ Download SQLite (.db)</a>
+        </div>
     </div>
 
     <div class="metrics">
-        <div class="metric-card"><h3>Total Patients</h3><div class="num">{len(patients)}</div></div>
-        <div class="metric-card"><h3>Total Appointments</h3><div class="num">{len(appointments)}</div></div>
-        <div class="metric-card"><h3>Billing Records</h3><div class="num">{len(bills)}</div></div>
-        <div class="metric-card"><h3>Active Doctors</h3><div class="num">{len(doctors)}</div></div>
+        <div class="metric-card"><h3>Total Patients</h3><div class="num" id="cnt-patients">-</div></div>
+        <div class="metric-card"><h3>Booked Appointments</h3><div class="num" id="cnt-appointments">-</div></div>
+        <div class="metric-card"><h3>Billing Records</h3><div class="num" id="cnt-bills">-</div></div>
+        <div class="metric-card"><h3>Doctors on Duty</h3><div class="num" id="cnt-doctors">-</div></div>
     </div>
 
     <div class="section">
-        <h2>📅 Live Booked Appointments ({len(appointments)})</h2>
+        <div class="section-header">
+            <h2>📅 Live Appointments Stream</h2>
+            <input type="text" id="filter-appts" class="search-box" placeholder="🔍 Search appointments..." onkeyup="renderAppts()">
+        </div>
         <table>
             <thead><tr><th>UID</th><th>Patient</th><th>Doctor</th><th>Date & Time</th><th>Status</th><th>Reason</th></tr></thead>
-            <tbody>{appt_rows if appt_rows else "<tr><td colspan='6'>No appointments found</td></tr>"}</tbody>
+            <tbody id="appts-tbody"><tr><td colspan="6" class="empty-row">Connecting to live database stream...</td></tr></tbody>
         </table>
     </div>
 
     <div class="section">
-        <h2>👤 Registered Patients ({len(patients)})</h2>
+        <div class="section-header">
+            <h2>👤 Registered Patients</h2>
+            <input type="text" id="filter-patients" class="search-box" placeholder="🔍 Search patients..." onkeyup="renderPatients()">
+        </div>
         <table>
-            <thead><tr><th>Patient ID</th><th>Name</th><th>Date of Birth</th><th>Phone</th><th>Registered At</th></tr></thead>
-            <tbody>{patient_rows if patient_rows else "<tr><td colspan='5'>No patients found</td></tr>"}</tbody>
+            <thead><tr><th>Patient ID</th><th>Name</th><th>Date of Birth</th><th>Phone Number</th><th>Registered At</th></tr></thead>
+            <tbody id="patients-tbody"><tr><td colspan="5" class="empty-row">Loading patient records...</td></tr></tbody>
         </table>
     </div>
 
     <div class="section">
-        <h2>💳 Billing & Invoices ({len(bills)})</h2>
+        <div class="section-header">
+            <h2>💳 Billing & Invoices</h2>
+        </div>
         <table>
-            <thead><tr><th>Invoice No</th><th>Patient</th><th>Total</th><th>Paid</th><th>Status</th></tr></thead>
-            <tbody>{bill_rows if bill_rows else "<tr><td colspan='5'>No bills found</td></tr>"}</tbody>
+            <thead><tr><th>Invoice No</th><th>Patient</th><th>Amount</th><th>Paid</th><th>Status</th></tr></thead>
+            <tbody id="bills-tbody"><tr><td colspan="5" class="empty-row">Loading billing data...</td></tr></tbody>
         </table>
     </div>
 
     <div class="section">
-        <h2>🛡️ Live Security Audit Trail (Last 15 Events)</h2>
+        <div class="section-header">
+            <h2>🛡️ Live Security Audit Trail (Recent Actions)</h2>
+        </div>
         <table>
             <thead><tr><th>Time</th><th>Action</th><th>Status</th><th>Patient</th><th>IP Address</th></tr></thead>
-            <tbody>{audit_rows if audit_rows else "<tr><td colspan='5'>No audit logs found</td></tr>"}</tbody>
+            <tbody id="audits-tbody"><tr><td colspan="5" class="empty-row">Loading audit stream...</td></tr></tbody>
         </table>
     </div>
+
+    <script>
+        let cachedData = null;
+
+        async function fetchLiveData(manual = false) {
+            try {
+                const res = await fetch('/api/admin/data?key={key}&t=' + Date.now());
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                if (!data.success) return;
+
+                cachedData = data;
+                document.getElementById('cnt-patients').innerText = data.counts.patients;
+                document.getElementById('cnt-appointments').innerText = data.counts.appointments;
+                document.getElementById('cnt-bills').innerText = data.counts.bills;
+                document.getElementById('cnt-doctors').innerText = data.counts.doctors;
+                
+                const now = new Date();
+                document.getElementById('sync-timer').innerText = 'Synced at: ' + now.toLocaleTimeString();
+
+                renderAppts();
+                renderPatients();
+                renderBills();
+                renderAudits();
+            } catch(e) {
+                console.error('Auto-sync error:', e);
+                document.getElementById('sync-timer').innerText = 'Sync failed. Reconnecting...';
+            }
+        }
+
+        function renderAppts() {
+            if (!cachedData) return;
+            const query = (document.getElementById('filter-appts').value || '').toLowerCase();
+            const tbody = document.getElementById('appts-tbody');
+            const filtered = cachedData.appointments.filter(a => 
+                a.patient_name.toLowerCase().includes(query) ||
+                a.doctor_name.toLowerCase().includes(query) ||
+                a.uid.toLowerCase().includes(query) ||
+                a.date.toLowerCase().includes(query)
+            );
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="empty-row">No appointments found matching your search.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = filtered.map(a => {
+                const st = (a.status || 'booked').toLowerCase();
+                const badgeClass = st === 'booked' ? 'badge-booked' : (st === 'completed' ? 'badge-completed' : 'badge-pending');
+                return `<tr>
+                    <td><code>${a.uid}</code></td>
+                    <td><b>${a.patient_name}</b> <small style="color:var(--text-muted)">(${a.patient_id})</small></td>
+                    <td>${a.doctor_name}</td>
+                    <td>${a.date} @ <b>${a.time}</b></td>
+                    <td><span class="badge ${badgeClass}">${st}</span></td>
+                    <td>${a.reason}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        function renderPatients() {
+            if (!cachedData) return;
+            const query = (document.getElementById('filter-patients').value || '').toLowerCase();
+            const tbody = document.getElementById('patients-tbody');
+            const filtered = cachedData.patients.filter(p => 
+                p.name.toLowerCase().includes(query) ||
+                p.id.toLowerCase().includes(query) ||
+                p.phone.includes(query)
+            );
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="empty-row">No registered patients found.</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = filtered.map(p => `<tr>
+                <td><code>${p.id}</code></td>
+                <td><b>${p.name}</b></td>
+                <td>${p.dob}</td>
+                <td><b>${p.phone}</b></td>
+                <td style="color:var(--text-muted)">${p.created_at}</td>
+            </tr>`).join('');
+        }
+
+        function renderBills() {
+            if (!cachedData) return;
+            const tbody = document.getElementById('bills-tbody');
+            if (cachedData.bills.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="empty-row">No invoices generated yet.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = cachedData.bills.map(b => {
+                const st = (b.status || 'pending').toLowerCase();
+                const badgeClass = st === 'paid' ? 'badge-booked' : 'badge-pending';
+                return `<tr>
+                    <td><code>${b.bill_number}</code></td>
+                    <td><b>${b.patient_name}</b></td>
+                    <td><b>₹${b.amount}</b></td>
+                    <td>₹${b.paid}</td>
+                    <td><span class="badge ${badgeClass}">${st}</span></td>
+                </tr>`;
+            }).join('');
+        }
+
+        function renderAudits() {
+            if (!cachedData) return;
+            const tbody = document.getElementById('audits-tbody');
+            if (cachedData.audits.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="empty-row">No recent audit logs.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = cachedData.audits.map(l => `<tr>
+                <td>${l.time}</td>
+                <td><b>${l.action}</b></td>
+                <td><span class="badge badge-booked">${l.status}</span></td>
+                <td><code>${l.patient_uid}</code></td>
+                <td style="color:var(--text-muted)">${l.ip}</td>
+            </tr>`).join('');
+        }
+
+        // Initial Load + Auto-Sync every 3 seconds
+        fetchLiveData();
+        setInterval(() => fetchLiveData(false), 3000);
+    </script>
 </body>
 </html>"""
-        return HTMLResponse(content=html_content)
-    finally:
-        db.close()
+    return HTMLResponse(
+        content=html_content,
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"}
+    )
 
 
 # ── Static files & frontend serving (No-Cache headers for live updates) ──
