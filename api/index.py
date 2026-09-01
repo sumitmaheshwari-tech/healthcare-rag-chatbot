@@ -3,6 +3,14 @@
 Vercel Serverless Function entry point for MedCare FastAPI Backend.
 """
 
+# Override system SQLite with pysqlite3 for ChromaDB compatibility on AWS Lambda / Vercel
+try:
+    __import__("pysqlite3")
+    import sys
+    sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
+except ImportError:
+    pass
+
 import sys
 import os
 from pathlib import Path
