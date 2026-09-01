@@ -346,3 +346,18 @@ class Session(Base):
     expires_at = Column(DateTime, nullable=False, index=True)
 
     user = relationship("User", back_populates="sessions")
+
+
+class TelegramAuthSession(Base):
+    __tablename__ = "telegram_auth_sessions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(100), unique=True, nullable=False, index=True)
+    flow = Column(String(20), nullable=False)  # "login" or "register"
+    patient_data_json = Column(Text, nullable=False)  # JSON serialized data
+    otp = Column(String(10), nullable=False)
+    chat_id = Column(Integer, nullable=True, index=True)
+    status = Column(String(50), default="AWAITING_TELEGRAM_START")
+    expires_at = Column(Float, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+

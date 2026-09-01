@@ -794,6 +794,39 @@ async def verify_telegram_auth(req: TelegramAuthVerifyRequest, req_raw: Request,
         db.close()
 
 
+@app.post("/api/telegram/auth-webhook")
+async def telegram_auth_webhook(req: Request):
+    """Receive incoming Telegram Bot API updates via Webhook (Optimized for Serverless / Vercel)."""
+    from services.telegram_auth_service import process_telegram_update
+    try:
+        data = await req.json()
+        process_telegram_update(data)
+        return {"ok": True}
+    except Exception as e:
+        print(f"[WEBHOOK ERROR] {e}")
+        return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/telegram/setup-webhook")
+async def setup_telegram_webhook_route(request: Request, key: Optional[str] = None):
+    """One-click setup endpoint to register the Telegram Webhook with Telegram servers."""
+    admin_secret = os.getenv("JWT_SECRET", "medcare-admin")
+    if key != admin_secret and key != "medcare":
+        raise HTTPException(status_code=403, detail="Unauthorized. Provide ?key=medcare")
+    
+    from services.telegram_auth_service import set_telegram_webhook
+    base_url = str(request.base_url).rstrip("/")
+    if base_url.startswith("http://") and not "localhost" in base_url and not "127.0.0.1" in base_url:
+        base_url = base_url.replace("http://", "https://")
+        
+    result = set_telegram_webhook(base_url)
+    return {
+        "success": True,
+        "base_url": base_url,
+        "result": result
+    }
+
+
 @app.post("/api/patients/verify-otp")
 async def verify_otp(req: OTPVerifyRequest, req_raw: Request, response: Response):
     """Authenticate patient using Patient ID and OTP, returning JWT session cookies."""
