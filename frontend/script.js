@@ -24,6 +24,8 @@ let registerNameInput, registerDobInput, registerPhoneInput, registerErrorBox, r
 let registerCredentialsGroup, registerOtpGroup, registerOtpInput, registerTelegramLink, registerBackBtn;
 
 let switchToRegisterLink, switchToLoginLink;
+let profileSelectCard, profileListContainer, addFamilyMemberBtn, switchBackToLogin;
+let lastVerifiedPhone = '';
 let chatInputContainer;
 
 let currentLoginSessionId = '';
@@ -70,7 +72,11 @@ document.addEventListener('DOMContentLoaded', () => {
     registerOtpGroup    = document.getElementById('register-otp-group');
     registerOtpInput    = document.getElementById('register-otp');
     registerTelegramLink = document.getElementById('register-telegram-link');
-    registerBackBtn     = document.getElementById('register-back-btn');
+        registerBackBtn     = document.getElementById('register-back-btn');
+    profileSelectCard   = document.getElementById('profile-select-card');
+    profileListContainer = document.getElementById('profile-list-container');
+    addFamilyMemberBtn  = document.getElementById('add-family-member-btn');
+    switchBackToLogin   = document.getElementById('switch-back-to-login');
     
     switchToRegisterLink = document.getElementById('switch-to-register');
     switchToLoginLink    = document.getElementById('switch-to-login');
@@ -475,11 +481,62 @@ function setupEventListeners() {
 
 // ── Phone & Recaptcha Helpers ─────────────────────────────────
 // ── Gated Authentication Form Listeners ───────────────────────
+
+// ── Family Profile Selector Helpers ───────────────────────────
+function showFamilyProfileSelector(profiles, phone) {
+    lastVerifiedPhone = phone || '';
+    loginCard.classList.add('hidden');
+    registerCard.classList.add('hidden');
+    profileSelectCard.classList.remove('hidden');
+
+    if (!profiles || profiles.length === 0) {
+        profileListContainer.innerHTML = '<p style="color:#718096;text-align:center;">No profiles found.</p>';
+        return;
+    }
+
+    profileListContainer.innerHTML = profiles.map(p => `
+        <div class="profile-card-item" onclick="chooseProfile('${p.patient_uid}', '${escapeHtml(p.name)}')">
+            <div class="profile-info">
+                <div class="profile-name"><i class="fas fa-user-circle" style="color:#2b6cb0;margin-right:6px;"></i> ${escapeHtml(p.name)}</div>
+                <div class="profile-sub">Patient ID: <code>${p.patient_uid}</code> ${p.dob ? ' • DOB: ' + p.dob : ''}</div>
+            </div>
+            <i class="fas fa-chevron-right profile-select-arrow"></i>
+        </div>
+    `).join('');
+}
+
+async function chooseProfile(patientUid, patientName) {
+    try {
+        const res = await fetch(`${API_BASE}/api/patients/select-profile`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ patient_uid: patientUid })
+        });
+        if (!res.ok) throw new Error('Failed to select profile.');
+        const data = await res.json();
+        profileSelectCard.classList.add('hidden');
+        loginPatient({
+            patient_uid: data.patient_uid,
+            name: data.name
+        });
+    } catch(err) {
+        alert(err.message || 'Error selecting profile.');
+    }
+}
+window.chooseProfile = chooseProfile;
+
+function escapeHtml(str) {
+    return (str || '').replace(/[&<>"']/g, m => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[m]);
+}
+
 function setupAuthFormListeners() {
     // 1. Toggle switch between cards
     switchToRegisterLink.addEventListener('click', (e) => {
         e.preventDefault();
         loginCard.classList.add('hidden');
+        profileSelectCard.classList.add('hidden');
         registerCard.classList.remove('hidden');
         loginErrorBox.classList.add('hidden');
         registerErrorBox.classList.add('hidden');
@@ -488,12 +545,40 @@ function setupAuthFormListeners() {
     switchToLoginLink.addEventListener('click', (e) => {
         e.preventDefault();
         registerCard.classList.add('hidden');
+        profileSelectCard.classList.add('hidden');
         loginCard.classList.remove('hidden');
         registerErrorBox.classList.add('hidden');
         loginErrorBox.classList.add('hidden');
     });
 
-    // 2. Telegram Sign In Form (Patient ID + DOB + Mobile Phone -> Telegram OTP)
+    if (switchBackToLogin) {
+        switchBackToLogin.addEventListener('click', (e) => {
+            e.preventDefault();
+            profileSelectCard.classList.add('hidden');
+            loginCard.classList.remove('hidden');
+            loginCredentialsGroup.classList.remove('hidden');
+            loginOtpGroup.classList.add('hidden');
+            loginSubmitBtn.textContent = '📲 Get OTP on Telegram';
+        });
+    }
+
+    if (addFamilyMemberBtn) {
+        addFamilyMemberBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            profileSelectCard.classList.add('hidden');
+            registerCard.classList.remove('hidden');
+            registerCredentialsGroup.classList.remove('hidden');
+            registerOtpGroup.classList.add('hidden');
+            registerSubmitBtn.textContent = '📲 Get OTP on Telegram';
+            if (lastVerifiedPhone) {
+                registerPhoneInput.value = lastVerifiedPhone;
+            }
+            registerNameInput.value = '';
+            registerNameInput.focus();
+        });
+    }
+
+    // 2. Telegram Sign In Form (Mobile Phone -> Telegram OTP -> Family Selector)
     loginForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         loginErrorBox.classList.add('hidden');
@@ -521,19 +606,17 @@ function setupAuthFormListeners() {
 
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
-                    throw new Error(err.detail || 'Identity verification failed. Please check your Patient ID, DOB, and Mobile Number.');
+                    throw new Error(err.detail || 'No account found with this phone number. Please click "Register profile here".');
                 }
 
                 const data = await res.json();
                 currentLoginSessionId = data.auth_session_id;
 
-                // Update Telegram Link & automatically open it for the user
                 if (loginTelegramLink && data.telegram_url) {
                     loginTelegramLink.href = data.telegram_url;
                     window.open(data.telegram_url, '_blank');
                 }
 
-                // Show OTP input screen
                 loginCredentialsGroup.classList.add('hidden');
                 loginOtpGroup.classList.remove('hidden');
                 loginOtpInput.required = true;
@@ -565,14 +648,18 @@ function setupAuthFormListeners() {
 
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
-                    throw new Error(err.detail || 'Invalid or expired OTP code. Please tap START in @MedCare_Verification_bot.');
+                    throw new Error(err.detail || 'Invalid or expired OTP code. Please tap START in @MedCare_Verify_Auth_bot.');
                 }
 
                 const data = await res.json();
-                loginPatient({
-                    patient_uid: data.patient_uid,
-                    name: data.name
-                });
+                if (!data.multiple_profiles) {
+                    loginPatient({
+                        patient_uid: data.patient_uid,
+                        name: data.name
+                    });
+                } else {
+                    showFamilyProfileSelector(data.profiles, data.phone || phone);
+                }
             } catch (err) {
                 loginErrorBox.textContent = err.message;
                 loginErrorBox.classList.remove('hidden');
@@ -591,7 +678,6 @@ function setupAuthFormListeners() {
         const dob = registerDobInput.value.trim();
         const phone = registerPhoneInput.value.trim();
 
-        // Step 1: Initiate Telegram Registration OTP Session
         if (registerOtpGroup.classList.contains('hidden')) {
             registerSubmitBtn.disabled = true;
             registerSubmitBtn.textContent = 'Opening Telegram Gateway...';
@@ -610,20 +696,17 @@ function setupAuthFormListeners() {
 
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
-                    const msg = err.detail || 'Registration failed. Please check your details.';
-                    throw new Error(msg);
+                    throw new Error(err.detail || 'Registration failed. Please check your details.');
                 }
 
                 const data = await res.json();
                 currentRegisterSessionId = data.auth_session_id;
 
-                // Update Telegram link & automatically open it for the user
                 if (registerTelegramLink && data.telegram_url) {
                     registerTelegramLink.href = data.telegram_url;
                     window.open(data.telegram_url, '_blank');
                 }
 
-                // Show OTP input screen
                 registerCredentialsGroup.classList.add('hidden');
                 registerOtpGroup.classList.remove('hidden');
                 registerOtpInput.required = true;
@@ -637,7 +720,6 @@ function setupAuthFormListeners() {
                 registerSubmitBtn.textContent = '📲 Get OTP on Telegram';
             }
         }
-        // Step 2: Verify Telegram OTP & Complete Registration
         else {
             const otp = registerOtpInput.value.trim();
             registerSubmitBtn.disabled = true;
@@ -655,24 +737,28 @@ function setupAuthFormListeners() {
 
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
-                    throw new Error(err.detail || 'Invalid or expired OTP code. Please tap START in @MedCare_Verification_bot.');
+                    throw new Error(err.detail || 'Invalid or expired OTP code. Please tap START in @MedCare_Verify_Auth_bot.');
                 }
 
                 const regData = await res.json();
 
-                // Log in the patient automatically
                 loginPatient({
                     patient_uid: regData.patient_uid,
                     name: regData.name,
                     dob: regData.dob
                 });
 
-                // Welcome message with new Patient ID
                 addMessage(
-                    `🎉 **Welcome to MedCare Hospital, ${regData.name}!**\n\n` +
-                    `Your identity has been verified via Telegram and your profile is active.\n\n` +
-                    `🔑 **Your Official Patient ID is:** \`${regData.patient_uid}\`\n\n` +
-                    `*(Please save this Patient ID for future sign-ins with your Date of Birth & Mobile Number.)*`,
+                    `🎉 **Welcome to MedCare Hospital, ${regData.name}!**
+
+` +
+                    `Your identity has been verified via Telegram and your profile is active.
+
+` +
+                    `🔑 **Your Official Patient ID is:** \`${regData.patient_uid}\`
+
+` +
+                    `*(You can now book appointments, view doctor availability, and check medical records anytime!)*`,
                     'bot'
                 );
             } catch (err) {
@@ -708,71 +794,4 @@ function setupAuthFormListeners() {
             registerErrorBox.classList.add('hidden');
         });
     }
-}
-
-// ── View Gating & Profile Rendering ───────────────────────────
-function loginPatient(patient) {
-    currentPatientId = patient.patient_uid;
-    currentPatientName = patient.name;
-    sessionId = generateSessionId(); // Reset chat thread
-
-    // Hide Auth overlay
-    authOverlay.classList.add('hidden');
-
-    // Show Chat layout elements
-    chatMessages.classList.remove('hidden');
-    quickActions.classList.remove('hidden');
-    chatInputContainer.classList.remove('hidden');
-
-    // Toggle header status display
-    authLoggedOutContainer.classList.add('hidden');
-    authLoggedInContainer.classList.remove('hidden');
-
-    authVerifiedText.innerHTML = `<i class="fas fa-user-check" style="color: #2f855a;"></i> Verified: <strong>${patient.name}</strong>`;
-
-    addWelcomeMessage();
-}
-
-async function logoutPatientSession() {
-    try {
-        await fetch(`${API_BASE}/api/patients/logout`, { method: 'POST' });
-    } catch (err) {
-        console.error("Logout request error:", err);
-    }
-    logoutPatientUI();
-}
-
-function logoutPatientUI() {
-    currentPatientId = '';
-    currentPatientName = '';
-    sessionId = generateSessionId();
-
-    // Show Auth overlay
-    authOverlay.classList.remove('hidden');
-    loginCard.classList.remove('hidden');
-    registerCard.classList.add('hidden');
-
-    // Hide Chat layout elements
-    chatMessages.classList.add('hidden');
-    quickActions.classList.add('hidden');
-    chatInputContainer.classList.add('hidden');
-
-    // Toggle header status display
-    authLoggedInContainer.classList.add('hidden');
-    authLoggedOutContainer.classList.remove('hidden');
-
-    // Clear inputs and error fields
-    loginForm.reset();
-    registerForm.reset();
-    loginErrorBox.classList.add('hidden');
-    registerErrorBox.classList.add('hidden');
-
-    // Reset OTP overlay UI to Step 1
-    if (loginCredentialsGroup) loginCredentialsGroup.classList.remove('hidden');
-    if (loginOtpGroup) loginOtpGroup.classList.add('hidden');
-    if (loginOtpInput) {
-        loginOtpInput.required = false;
-        loginOtpInput.value = '';
-    }
-    if (loginSubmitBtn) loginSubmitBtn.textContent = 'Verify Identity';
 }

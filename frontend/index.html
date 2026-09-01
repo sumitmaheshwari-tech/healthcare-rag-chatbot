@@ -70,24 +70,24 @@
                 <div id="login-card" class="auth-card-inner">
                     <div class="card-header-icon"><i class="fas fa-lock"></i></div>
                     <h2>Secure Patient Sign In</h2>
-                    <p class="auth-subtitle" id="login-subtitle">Sign in using your Patient ID, Date of Birth, and Mobile Number.</p>
+                    <p class="auth-subtitle" id="login-subtitle">Sign in instantly with your Mobile Number or Patient ID.</p>
                     
                     <form id="login-form" class="auth-form-el">
                         <div id="login-credentials-group">
-                            <div class="auth-input-group">
-                                <label for="login-uid">Patient ID</label>
-                                <input type="text" id="login-uid" required placeholder="e.g. pat-bcb9395873bc" autocomplete="username">
-                            </div>
-                            <div class="auth-input-group">
-                                <label for="login-dob">Date of Birth</label>
-                                <input type="date" id="login-dob" required>
-                            </div>
                             <div class="auth-input-group">
                                 <label for="login-phone">Registered Mobile Number</label>
                                 <div class="phone-input-wrapper">
                                     <span class="phone-prefix">🇮🇳 +91</span>
                                     <input type="tel" id="login-phone" required placeholder="9876543210" autocomplete="tel">
                                 </div>
+                            </div>
+                            <div class="auth-input-group">
+                                <label for="login-dob">Date of Birth <span style="font-size:0.75rem;color:#718096;">(Optional)</span></label>
+                                <input type="date" id="login-dob">
+                            </div>
+                            <div class="auth-input-group">
+                                <label for="login-uid">Patient ID <span style="font-size:0.75rem;color:#718096;">(Optional)</span></label>
+                                <input type="text" id="login-uid" placeholder="pat-xxxx (or leave blank)" autocomplete="username">
                             </div>
                         </div>
 
@@ -96,8 +96,8 @@
                             <div class="telegram-step-box">
                                 <strong><i class="fab fa-telegram" style="color: #0088cc;"></i> Step 1:</strong> Tap below to open our official bot and receive your security code directly in Telegram:
                             </div>
-                            <a id="login-telegram-link" href="https://t.me/MedCare_Verification_bot" target="_blank" class="telegram-open-btn">
-                                <i class="fab fa-telegram-plane"></i> Tap to Open @MedCare_Verification_bot
+                            <a id="login-telegram-link" href="https://t.me/MedCare_Verify_Auth_bot" target="_blank" class="telegram-open-btn">
+                                <i class="fab fa-telegram-plane"></i> Tap to Open @MedCare_Verify_Auth_bot
                             </a>
                             <label for="login-otp" style="margin-top: 6px;">Enter 6-Digit Telegram Code</label>
                             <input type="text" id="login-otp" class="otp-input-field" maxlength="6" placeholder="• • • • • •" pattern="\d{6}">
@@ -121,7 +121,7 @@
                 <div id="register-card" class="auth-card-inner hidden">
                     <div class="card-header-icon"><i class="fas fa-user-plus"></i></div>
                     <h2>Register Patient Profile</h2>
-                    <p class="auth-subtitle" id="register-subtitle">Enter your details. A verification code will be sent to your Telegram.</p>
+                    <p class="auth-subtitle" id="register-subtitle">Create a new profile or add a family member under your mobile number.</p>
                     
                     <form id="register-form" class="auth-form-el">
                         <div id="register-credentials-group">
@@ -147,8 +147,8 @@
                             <div class="telegram-step-box">
                                 <strong><i class="fab fa-telegram" style="color: #0088cc;"></i> Step 1:</strong> Tap below to open our official bot and receive your security code directly in Telegram:
                             </div>
-                            <a id="register-telegram-link" href="https://t.me/MedCare_Verification_bot" target="_blank" class="telegram-open-btn">
-                                <i class="fab fa-telegram-plane"></i> Tap to Open @MedCare_Verification_bot
+                            <a id="register-telegram-link" href="https://t.me/MedCare_Verify_Auth_bot" target="_blank" class="telegram-open-btn">
+                                <i class="fab fa-telegram-plane"></i> Tap to Open @MedCare_Verify_Auth_bot
                             </a>
                             <label for="register-otp" style="margin-top: 6px;">Enter 6-Digit Telegram Code</label>
                             <input type="text" id="register-otp" class="otp-input-field" maxlength="6" placeholder="• • • • • •" pattern="\d{6}">
@@ -166,6 +166,22 @@
                         <button type="submit" id="register-submit-btn" class="auth-btn register-btn">📲 Get OTP on Telegram</button>
                     </form>
                     <p class="auth-switch" id="register-switch-container">Already registered? <a href="#" id="switch-to-login">Sign In here</a></p>
+                </div>
+
+                <!-- Family Multi-Profile Selection Card -->
+                <div id="profile-select-card" class="auth-card-inner hidden">
+                    <div class="card-header-icon"><i class="fas fa-users"></i></div>
+                    <h2>Who is visiting today?</h2>
+                    <p class="auth-subtitle">Multiple patient profiles are linked to this mobile number. Select who needs care:</p>
+                    
+                    <div id="profile-list-container" class="profile-list-wrapper">
+                        <!-- Populated dynamically by script.js -->
+                    </div>
+
+                    <button type="button" id="add-family-member-btn" class="auth-btn" style="background:#334155;margin-top:10px;">
+                        <i class="fas fa-user-plus"></i> + Add New Family Member
+                    </button>
+                    <p class="auth-switch" style="margin-top:14px;"><a href="#" id="switch-back-to-login"><i class="fas fa-arrow-left"></i> Use a different phone number</a></p>
                 </div>
 
             </div>

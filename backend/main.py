@@ -215,6 +215,10 @@ class TelegramAuthInitiateRequest(BaseModel):
     patient_uid: Optional[str] = ""
 
 
+
+class SelectProfileRequest(BaseModel):
+    patient_uid: str
+
 class TelegramAuthVerifyRequest(BaseModel):
     auth_session_id: str
     otp: str
@@ -653,49 +657,94 @@ async def login_patient(req: LoginRequest, req_raw: Request, response: Response)
         db.close()
 
 
+@app.post("/api/patients/select-profile")
+async def select_patient_profile(req: SelectProfileRequest, response: Response, req_raw: Request):
+    """Issue secure session cookies for a chosen family profile after phone verification."""
+    response.headers["Cache-Control"] = "no-store"
+    db = get_db()
+    try:
+        patient = db.query(Patient).filter(Patient.id == req.patient_uid.strip()).first()
+        if not patient:
+            raise HTTPException(status_code=404, detail="Selected profile not found.")
+
+        access_token, refresh_token = create_tokens(patient.id)
+        set_jwt_cookies(response, access_token, refresh_token)
+
+        log_audit_event(
+            request_id=str(uuid.uuid4()),
+            action="SELECT_PROFILE",
+            status="SUCCESS",
+            patient_uid=patient.id,
+            ip_address=req_raw.client.host,
+            user_agent=req_raw.headers.get("User-Agent"),
+            details=f"Patient {patient.name} ({patient.id}) active in session."
+        )
+
+        return {
+            "success": True,
+            "patient_uid": patient.id,
+            "name": patient.name
+        }
+    finally:
+        db.close()
+
+
 @app.post("/api/auth/telegram/initiate")
 async def initiate_telegram_auth(req: TelegramAuthInitiateRequest, req_raw: Request):
-    """Initiate a Telegram OTP authentication session for @MedCare_Verification_bot."""
+    """Initiate a Telegram OTP authentication session for @MedCare_Verify_Auth_bot."""
     from services.telegram_auth_service import create_auth_session
     
     db = get_db()
     try:
+        target_phone = normalize_phone_number(req.phone or req.patient_uid or "")
+        if not target_phone or len(target_phone) < 10:
+            raise HTTPException(status_code=400, detail="Please enter a valid 10-digit registered mobile number.")
+
         if req.flow == "login":
+            # Check if any patient exists with this phone or UID
             patient = find_patient_in_db(db, req.patient_uid, req.phone)
             if not patient:
-                raise HTTPException(status_code=400, detail="Invalid Patient ID or Mobile Number. Please check your details or register.")
+                # Also search any patient by phone
+                all_patients = db.query(Patient).all()
+                for p in all_patients:
+                    p_phone = normalize_phone_number(decrypt_value(p.phone) if p.phone else "")
+                    if p_phone == target_phone:
+                        patient = p
+                        break
             
-            target_dob = normalize_dob(req.dob)
-            dec_dob = normalize_dob(decrypt_value(patient.dob) if patient.dob else "")
-            if target_dob and dec_dob and dec_dob != target_dob:
-                raise HTTPException(status_code=400, detail="Date of Birth mismatch with registered records.")
-            
-            target_phone = normalize_phone_number(req.phone or "")
-            dec_phone = normalize_phone_number(decrypt_value(patient.phone) if patient.phone else "")
-            if target_phone and dec_phone and target_phone != dec_phone:
-                raise HTTPException(status_code=400, detail="Mobile phone does not match registered records.")
+            if not patient:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No patient profile found with this mobile number. Click 'Register profile here' to create your account in 10 seconds!"
+                )
 
             session_info = create_auth_session(flow="login", data={
-                "patient_uid": patient.id,
-                "name": patient.name,
-                "dob": req.dob,
-                "phone": decrypt_value(patient.phone) if patient.phone else req.phone
+                "patient_uid": req.patient_uid.strip() if req.patient_uid else "",
+                "phone": target_phone,
+                "dob": req.dob or ""
             })
             return {"success": True, **session_info}
         
         elif req.flow == "register":
-            # Check duplicate phone
-            target_phone = normalize_phone_number(req.phone)
-            existing_patients = db.query(Patient).all()
-            for ep in existing_patients:
+            clean_name = req.name.strip()
+            if not clean_name:
+                raise HTTPException(status_code=400, detail="Please enter your full name.")
+
+            # Check if exact same Name + Phone already exists
+            all_patients = db.query(Patient).all()
+            exact_match = None
+            for ep in all_patients:
                 ep_phone = normalize_phone_number(decrypt_value(ep.phone) if ep.phone else "")
-                if ep_phone and ep_phone == target_phone:
-                    raise HTTPException(status_code=400, detail="A patient with this mobile number is already registered. Please Sign In.")
+                if ep_phone == target_phone and ep.name.strip().lower() == clean_name.lower():
+                    exact_match = ep
+                    break
 
             session_info = create_auth_session(flow="register", data={
-                "name": req.name.strip(),
-                "dob": req.dob.strip(),
-                "phone": req.phone.strip()
+                "name": clean_name,
+                "dob": req.dob.strip() if req.dob else "",
+                "phone": target_phone,
+                "is_existing": exact_match is not None,
+                "existing_uid": exact_match.id if exact_match else ""
             })
             return {"success": True, **session_info}
         else:
@@ -706,89 +755,137 @@ async def initiate_telegram_auth(req: TelegramAuthInitiateRequest, req_raw: Requ
 
 @app.post("/api/auth/telegram/verify")
 async def verify_telegram_auth(req: TelegramAuthVerifyRequest, req_raw: Request, response: Response):
-    """Verify the 6-digit Telegram OTP and issue secure JWT session cookies."""
+    """Verify 6-digit Telegram OTP & support Multi-Profile Family Selection."""
     from services.telegram_auth_service import verify_session_otp
     
     result = verify_session_otp(req.auth_session_id, req.otp)
     if not result:
-        raise HTTPException(status_code=400, detail="Invalid or expired verification code. Please tap START on @MedCare_Verification_bot to get your code.")
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code. Please tap START on @MedCare_Verify_Auth_bot to get your code.")
 
     flow = result["flow"]
     p_data = result["data"]
     req_id = str(uuid.uuid4())
     ip_addr = req_raw.client.host
+    verified_phone = normalize_phone_number(p_data.get("phone", ""))
 
     db = get_db()
     try:
+        # ── REGISTRATION FLOW ─────────────────────────────────────────
         if flow == "register":
-            new_uid = f"pat-{uuid.uuid4().hex[:12]}"
-            age = 0
-            try:
-                dob_date = datetime.strptime(p_data["dob"], "%Y-%m-%d")
-                age = (datetime.utcnow() - dob_date).days // 365
-            except Exception:
-                pass
+            existing_patient = None
+            if p_data.get("existing_uid"):
+                existing_patient = db.query(Patient).filter(Patient.id == p_data["existing_uid"]).first()
+            
+            if not existing_patient:
+                for ep in db.query(Patient).all():
+                    ep_phone = normalize_phone_number(decrypt_value(ep.phone) if ep.phone else "")
+                    if ep_phone == verified_phone and ep.name.strip().lower() == p_data["name"].strip().lower():
+                        existing_patient = ep
+                        break
 
-            new_pat = Patient(
-                id=new_uid,
-                name=p_data["name"],
-                dob=encrypt_value(p_data["dob"]),
-                age=age,
-                gender="Unknown",
-                phone=encrypt_value(p_data["phone"]),
-                email=encrypt_value(""),
-                address=encrypt_value(""),
-                blood_group=encrypt_value(""),
-                emergency_contact=encrypt_value("")
-            )
-            db.add(new_pat)
-            db.commit()
+            if existing_patient:
+                patient = existing_patient
+            else:
+                new_uid = f"pat-{uuid.uuid4().hex[:12]}"
+                age = 0
+                if p_data.get("dob"):
+                    try:
+                        dob_date = datetime.strptime(p_data["dob"], "%Y-%m-%d")
+                        age = (datetime.utcnow() - dob_date).days // 365
+                    except Exception:
+                        pass
 
-            log_audit_event(
-                request_id=req_id,
-                action="REGISTER_TELEGRAM_OTP",
-                status="SUCCESS",
-                patient_uid=new_uid,
-                ip_address=ip_addr,
-                user_agent=req_raw.headers.get("User-Agent"),
-                details=f"Registered patient '{new_pat.name}' via Telegram Auth Bot."
-            )
-
-            access_token, refresh_token = create_tokens(new_uid)
-            set_jwt_cookies(response, access_token, refresh_token)
-
-            return {
-                "success": True,
-                "patient_uid": new_uid,
-                "name": new_pat.name,
-                "dob": p_data["dob"]
-            }
-
-        elif flow == "login":
-            patient = db.query(Patient).filter(Patient.id == p_data["patient_uid"]).first()
-            if not patient:
-                raise HTTPException(status_code=400, detail="Patient profile not found.")
-
-            clear_ip_attempts(ip_addr)
-            clear_account_attempts(db, patient)
+                patient = Patient(
+                    id=new_uid,
+                    name=p_data["name"],
+                    dob=encrypt_value(p_data.get("dob", "")),
+                    age=age,
+                    gender="Unknown",
+                    phone=encrypt_value(verified_phone),
+                    email=encrypt_value(""),
+                    address=encrypt_value(""),
+                    blood_group=encrypt_value(""),
+                    emergency_contact=encrypt_value("")
+                )
+                db.add(patient)
+                db.commit()
 
             access_token, refresh_token = create_tokens(patient.id)
             set_jwt_cookies(response, access_token, refresh_token)
 
             log_audit_event(
                 request_id=req_id,
-                action="LOGIN_TELEGRAM_OTP",
+                action="REGISTER_TELEGRAM_OTP",
                 status="SUCCESS",
                 patient_uid=patient.id,
                 ip_address=ip_addr,
                 user_agent=req_raw.headers.get("User-Agent"),
-                details=f"Patient {patient.name} logged in via Telegram Auth Bot."
+                details=f"Patient {patient.name} registered and authenticated via Telegram."
             )
 
             return {
                 "success": True,
                 "patient_uid": patient.id,
-                "name": patient.name
+                "name": patient.name,
+                "dob": p_data.get("dob", "")
+            }
+
+        # ── SIGN IN FLOW (With Multi-Profile Family Support) ────────────
+        elif flow == "login":
+            all_patients = db.query(Patient).all()
+            matching_patients = []
+            
+            # Find all profiles belonging to this phone number
+            for p in all_patients:
+                ep_phone = normalize_phone_number(decrypt_value(p.phone) if p.phone else "")
+                if ep_phone == verified_phone:
+                    matching_patients.append(p)
+                elif p_data.get("patient_uid") and p.id.lower() == p_data["patient_uid"].lower():
+                    if p not in matching_patients:
+                        matching_patients.append(p)
+
+            if not matching_patients:
+                raise HTTPException(status_code=404, detail="No patient profile found for this mobile number.")
+
+            # If only 1 profile or specific UID requested: Log in directly
+            if len(matching_patients) == 1:
+                patient = matching_patients[0]
+                access_token, refresh_token = create_tokens(patient.id)
+                set_jwt_cookies(response, access_token, refresh_token)
+
+                log_audit_event(
+                    request_id=req_id,
+                    action="LOGIN_TELEGRAM_OTP",
+                    status="SUCCESS",
+                    patient_uid=patient.id,
+                    ip_address=ip_addr,
+                    user_agent=req_raw.headers.get("User-Agent"),
+                    details=f"Patient {patient.name} logged in via Telegram OTP."
+                )
+
+                return {
+                    "success": True,
+                    "multiple_profiles": False,
+                    "patient_uid": patient.id,
+                    "name": patient.name
+                }
+
+            # Multiple family profiles exist on this phone: Return profile options
+            profiles = []
+            for p in matching_patients:
+                dec_dob = decrypt_value(p.dob) if p.dob else ""
+                profiles.append({
+                    "patient_uid": p.id,
+                    "name": p.name,
+                    "dob": dec_dob,
+                    "age": p.age or ""
+                })
+
+            return {
+                "success": True,
+                "multiple_profiles": True,
+                "phone": verified_phone,
+                "profiles": profiles
             }
     finally:
         db.close()
@@ -1176,7 +1273,7 @@ async def admin_database_dashboard(key: Optional[str] = None):
             status_code=403
         )
 
-    html_content = f"""<!DOCTYPE html>
+    html_content = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <title>🏥 MedCare Hospital — Live Production Command Center</title>
@@ -1535,7 +1632,7 @@ async def admin_database_dashboard(key: Optional[str] = None):
 </body>
 </html>"""
     return HTMLResponse(
-        content=html_content,
+        content=html_content.replace("{key}", key or "medcare"),
         headers={"Cache-Control": "no-store, no-cache, must-revalidate"}
     )
 
