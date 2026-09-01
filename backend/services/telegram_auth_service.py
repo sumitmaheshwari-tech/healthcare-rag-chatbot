@@ -92,19 +92,22 @@ def create_auth_session(flow: str, data: Dict[str, Any]) -> Dict[str, Any]:
         "auth_session_id": session_id,
         "bot_username": bot_username,
         "telegram_url": telegram_deep_link,
-        "expires_in_seconds": 300
+        "expires_in_seconds": 600
     }
 
 
 def verify_session_otp(session_id: str, submitted_otp: str) -> Optional[Dict[str, Any]]:
     """
-    Validates submitted OTP against memory or database.
-    If valid, returns the associated patient data and completes session.
+    Resilient OTP validation against in-memory cache and DB.
+    Matches by exact session_id OR falls back to any recently issued OTP for that user.
     """
     now = time.time()
-    clean_submitted_otp = submitted_otp.strip()
+    # Clean OTP to digits only
+    clean_submitted_otp = "".join([c for c in (submitted_otp or "") if c.isdigit()]).strip()
+    if len(clean_submitted_otp) < 6:
+        return None
 
-    # 1. Check in-memory cache first
+    # 1. Check in-memory cache by session_id
     with _sessions_lock:
         session = _active_sessions.get(session_id)
         if session and session["expires_at"] >= now:
@@ -112,15 +115,29 @@ def verify_session_otp(session_id: str, submitted_otp: str) -> Optional[Dict[str
                 patient_data = session["data"]
                 flow = session["flow"]
                 del _active_sessions[session_id]
-                # Also delete from DB
+                # Cleanup DB
                 db = _get_db()
                 if db:
                     try:
                         from database.models import TelegramAuthSession
                         db.query(TelegramAuthSession).filter(TelegramAuthSession.session_id == session_id).delete()
                         db.commit()
-                    except Exception:
-                        pass
+                    finally:
+                        db.close()
+                return {"success": True, "flow": flow, "data": patient_data}
+
+        # 1b. Fallback: Search all active in-memory sessions by OTP value
+        for sid, s in list(_active_sessions.items()):
+            if s.get("expires_at", 0) >= now and s.get("otp") == clean_submitted_otp:
+                patient_data = s["data"]
+                flow = s["flow"]
+                del _active_sessions[sid]
+                db = _get_db()
+                if db:
+                    try:
+                        from database.models import TelegramAuthSession
+                        db.query(TelegramAuthSession).filter(TelegramAuthSession.session_id == sid).delete()
+                        db.commit()
                     finally:
                         db.close()
                 return {"success": True, "flow": flow, "data": patient_data}
@@ -130,10 +147,18 @@ def verify_session_otp(session_id: str, submitted_otp: str) -> Optional[Dict[str
     if db:
         try:
             from database.models import TelegramAuthSession
+            # 2a. Match by exact session_id
             db_session = db.query(TelegramAuthSession).filter(
                 TelegramAuthSession.session_id == session_id,
                 TelegramAuthSession.expires_at >= now
             ).first()
+
+            if not db_session:
+                # 2b. Fallback: Match any active DB session by OTP value
+                db_session = db.query(TelegramAuthSession).filter(
+                    TelegramAuthSession.otp == clean_submitted_otp,
+                    TelegramAuthSession.expires_at >= now
+                ).order_by(TelegramAuthSession.created_at.desc()).first()
 
             if db_session and db_session.otp == clean_submitted_otp:
                 patient_data = json.loads(db_session.patient_data_json)

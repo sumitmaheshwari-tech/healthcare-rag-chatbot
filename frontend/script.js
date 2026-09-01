@@ -795,3 +795,73 @@ function setupAuthFormListeners() {
         });
     }
 }
+
+// ── Patient Session State Management (Gated UI Controller) ──
+function loginPatient(patient) {
+    if (!patient || !patient.patient_uid) return;
+
+    currentPatientId = patient.patient_uid;
+    currentPatientName = patient.name || 'Patient';
+
+    // 1. Hide the entire full-screen Auth Overlay
+    if (authOverlay) {
+        authOverlay.classList.add('hidden');
+    }
+
+    // 2. Reveal Chat Area, Quick Action Chips, and Input Footer
+    if (chatMessages) chatMessages.classList.remove('hidden');
+    if (quickActions) quickActions.classList.remove('hidden');
+    if (chatInputContainer) chatInputContainer.classList.remove('hidden');
+
+    // 3. Update Top Navigation Bar Status Badge
+    if (authLoggedOutContainer) authLoggedOutContainer.classList.add('hidden');
+    if (authLoggedInContainer) authLoggedInContainer.classList.remove('hidden');
+    if (authVerifiedText) {
+        authVerifiedText.innerHTML = `<i class="fas fa-user-check" style="color: #10b981;"></i> <strong>${escapeHtml(currentPatientName)}</strong> <span style="font-size:0.75rem;color:#718096;">(${currentPatientId})</span>`;
+    }
+
+    // 4. Render initial greeting if chat is empty
+    if (chatMessages && chatMessages.children.length === 0) {
+        addWelcomeMessage();
+    }
+}
+
+function logoutPatientUI() {
+    currentPatientId = '';
+    currentPatientName = '';
+
+    // 1. Show the full-screen Auth Overlay Gate
+    if (authOverlay) {
+        authOverlay.classList.remove('hidden');
+    }
+
+    // 2. Hide Chat Area and Input
+    if (chatMessages) chatMessages.classList.add('hidden');
+    if (quickActions) quickActions.classList.add('hidden');
+    if (chatInputContainer) chatInputContainer.classList.add('hidden');
+
+    // 3. Reset Top Navigation Status Badge
+    if (authLoggedInContainer) authLoggedInContainer.classList.add('hidden');
+    if (authLoggedOutContainer) authLoggedOutContainer.classList.remove('hidden');
+
+    // 4. Reset forms to Login view
+    if (loginCard) loginCard.classList.remove('hidden');
+    if (registerCard) registerCard.classList.add('hidden');
+    if (profileSelectCard) profileSelectCard.classList.add('hidden');
+    if (loginCredentialsGroup) loginCredentialsGroup.classList.remove('hidden');
+    if (loginOtpGroup) loginOtpGroup.classList.add('hidden');
+    if (loginSubmitBtn) {
+        loginSubmitBtn.disabled = false;
+        loginSubmitBtn.textContent = '📲 Get OTP on Telegram';
+    }
+}
+
+async function logoutPatientSession() {
+    try {
+        await fetch(`${API_BASE}/api/patients/logout`, { method: 'POST' });
+    } catch (err) {
+        console.error("Logout error:", err);
+    }
+    logoutPatientUI();
+    window.location.reload();
+}
