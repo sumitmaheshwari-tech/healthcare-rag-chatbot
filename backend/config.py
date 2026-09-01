@@ -47,11 +47,17 @@ class Settings:
     OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.1")
 
     # ChromaDB
-    CHROMA_PERSIST_DIR: str = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
+    _raw_chroma: str = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
+    if (os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME")) and "/tmp" not in _raw_chroma:
+        CHROMA_PERSIST_DIR: str = "/tmp/chroma_db"
+    else:
+        CHROMA_PERSIST_DIR: str = _raw_chroma
     CHROMA_COLLECTION: str = "hospital_knowledge"
 
-    # Database — Render provides postgres:// URLs, SQLAlchemy 2.0 needs postgresql://
+    # Database — Render/Vercel provides postgres:// URLs, SQLAlchemy 2.0 needs postgresql://
     _raw_db_url: str = os.getenv("DATABASE_URL", "sqlite:///./hospital.db")
+    if (os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME")) and "sqlite" in _raw_db_url and "/tmp" not in _raw_db_url:
+        _raw_db_url = "sqlite:////tmp/hospital.db"
     DATABASE_URL: str = _raw_db_url.replace("postgres://", "postgresql://", 1) if _raw_db_url.startswith("postgres://") else _raw_db_url
 
     # Paths

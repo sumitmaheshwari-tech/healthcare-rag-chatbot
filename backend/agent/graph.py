@@ -30,10 +30,13 @@ from config import settings
 
 
 # ── Persistent Checkpointer (survives restarts) ─────────────────────
-_CHECKPOINT_DB_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "checkpoints.db"
-)
+if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+    _CHECKPOINT_DB_PATH = "/tmp/checkpoints.db"
+else:
+    _CHECKPOINT_DB_PATH = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "checkpoints.db"
+    )
 
 
 async def _get_async_checkpointer():
