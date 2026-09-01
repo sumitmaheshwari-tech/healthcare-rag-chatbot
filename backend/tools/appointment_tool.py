@@ -67,36 +67,47 @@ def _generate_slots(start: str, end: str, duration: int) -> list[str]:
 
 @tool
 def check_doctor_availability(doctor_name: str, date: str = "", date_str: str = "") -> str:
-    """Check available appointment slots for a specific doctor on a given date.
+    """Check available appointment slots for a specific doctor or department on a given date.
 
     Args:
-        doctor_name: Full or partial name of the doctor (e.g. 'Dr. Ananya Reddy' or 'Ananya').
-        date: The date to check in YYYY-MM-DD format (e.g. '2026-08-10').
-        date_str: The date to check in YYYY-MM-DD format (e.g. '2026-08-10').
+        doctor_name: Full or partial name of the doctor (e.g. 'Dr. Ananya Reddy') or department ('Cardiology').
+        date: The date to check in YYYY-MM-DD format (e.g. '2026-09-05').
+        date_str: The date to check in YYYY-MM-DD format (e.g. '2026-09-05').
     """
     db = get_db()
     try:
         target_date_raw = date or date_str
         if not target_date_raw:
-            return "Please provide a date in YYYY-MM-DD format (e.g. 2026-08-10)."
+            return "Please provide a date in YYYY-MM-DD format (e.g. 2026-09-05)."
 
-        # Find doctor
+        # Find doctor by Name OR by Department
         doctor = (
             db.query(Doctor)
             .filter(Doctor.name.ilike(f"%{doctor_name}%"))
             .first()
         )
         if not doctor:
-            return f"Sorry, I could not find a doctor matching '{doctor_name}'. Please check the name and try again."
+            # Try searching by specialization or department
+            from database.models import Department
+            dept = db.query(Department).filter(Department.name.ilike(f"%{doctor_name}%")).first()
+            if dept:
+                docs = db.query(Doctor).filter(Doctor.department_id == dept.id).all()
+                if docs:
+                    doctor = docs[0]
+            else:
+                doctor = db.query(Doctor).filter(Doctor.specialization.ilike(f"%{doctor_name}%")).first()
+
+        if not doctor:
+            return f"Sorry, I could not find a doctor or department matching '{doctor_name}'. Please check the specialist name or department."
 
         # Parse date
         try:
             target_date = datetime.strptime(target_date_raw, "%Y-%m-%d").date()
         except ValueError:
-            return "Invalid date format. Please use YYYY-MM-DD (e.g. 2026-07-15)."
+            return "Invalid date format. Please use YYYY-MM-DD (e.g. 2026-09-05)."
 
         if target_date < datetime.now().date():
-            return "That date is in the past. Please choose a future date."
+            return "That date is in the past. Please choose today or a future date."
 
         # Check hospital holiday
         holiday = db.query(DoctorHoliday).filter(DoctorHoliday.date == target_date).first()
@@ -125,12 +136,12 @@ def check_doctor_availability(doctor_name: str, date: str = "", date_str: str = 
         )
         if not schedule:
             return (
-                f"{doctor.name} does not have a scheduled clinic on "
-                f"{target_date.strftime('%A, %B %d, %Y')}. "
-                f"Please try a different date."
+                f"{doctor.name} ({doctor.department.name if doctor.department else 'Specialist'}) "
+                f"does not have clinic hours on {target_date.strftime('%A')}s. "
+                f"Please try another day of the week."
             )
 
-        # All possible slots
+        # All possible slots for doctor
         all_slots = _generate_slots(
             schedule.start_time, schedule.end_time, schedule.slot_duration_mins
         )
@@ -146,46 +157,96 @@ def check_doctor_availability(doctor_name: str, date: str = "", date_str: str = 
             .all()
         )
         booked_times = {row.time for row in booked}
-
         open_slots = [s for s in all_slots if s not in booked_times]
 
         if not open_slots:
-            return (
-                f"Sorry, {doctor.name} is fully booked on "
-                f"{target_date.strftime('%A, %B %d, %Y')}. "
-                f"Please try another date."
-            )
+            # Find next available date with free slots
+            next_date = target_date + timedelta(days=1)
+            found_alt = None
+            for _ in range(10):
+                dow = next_date.weekday()
+                sch = db.query(DoctorSchedule).filter(
+                    DoctorSchedule.doctor_id == doctor.id,
+                    DoctorSchedule.day_of_week == dow,
+                    DoctorSchedule.is_active == True
+                ).first()
+                if sch:
+                    b_set = {
+                        r.time for r in db.query(Appointment.time).filter(
+                            Appointment.doctor_id == doctor.id,
+                            Appointment.date == next_date,
+                            Appointment.status == AppointmentStatus.BOOKED
+                        ).all()
+                    }
+                    d_slots = _generate_slots(sch.start_time, sch.end_time, sch.slot_duration_mins)
+                    free = [s for s in d_slots if s not in b_set]
+                    if free:
+                        found_alt = (next_date, free[:5])
+                        break
+                next_date += timedelta(days=1)
+
+            if found_alt:
+                alt_d, alt_s = found_alt
+                friendly_s = [datetime.strptime(s, "%H:%M").strftime("%I:%M %p").lstrip("0") for s in alt_s]
+                return (
+                    f"⚠️ **Fully Booked:** {doctor.name} is fully booked on {target_date.strftime('%A, %B %d, %Y')}.
+
+"
+                    f"💡 **Next Available Date:** **{alt_d.strftime('%A, %B %d, %Y')}**
+"
+                    f"• Available Slots: {', '.join(friendly_s)}
+
+"
+                    f"Would you like to schedule an appointment on this date instead?"
+                )
+            else:
+                return f"Sorry, {doctor.name} is fully booked on {target_date.strftime('%A, %B %d, %Y')}. Please choose another date."
 
         # Classify slots into Morning, Afternoon, and Evening suggestions
         morning_slots = []
         afternoon_slots = []
         evening_slots = []
+
         for s in open_slots:
             try:
-                t_val = datetime.strptime(s, "%H:%M").time()
-                if t_val < datetime.strptime("12:00", "%H:%M").time():
-                    morning_slots.append(s)
-                elif t_val < datetime.strptime("16:00", "%H:%M").time():
-                    afternoon_slots.append(s)
+                dt = datetime.strptime(s, "%H:%M")
+                display_time = dt.strftime("%I:%M %p").lstrip("0")
+                h = dt.hour
+                if h < 12:
+                    morning_slots.append(display_time)
+                elif h < 16:
+                    afternoon_slots.append(display_time)
                 else:
-                    evening_slots.append(s)
+                    evening_slots.append(display_time)
             except Exception:
                 morning_slots.append(s)
 
         res_str = (
-            f"📅 **Availability for {doctor.name} ({doctor.specialization}) on "
-            f"{target_date.strftime('%A, %B %d, %Y')}:**\n\n"
+            f"📅 **Available Slots for {doctor.name}** "
+            f"({doctor.department.name if doctor.department else 'Specialist'}, {doctor.specialization})
+"
+            f"📆 **Date:** {target_date.strftime('%A, %B %d, %Y')}
+
+"
         )
         if morning_slots:
-            res_str += f"🌅 **Morning (09:00 - 12:00):** {', '.join(morning_slots)}\n"
+            res_str += f"🌅 **Morning:** {', '.join(morning_slots)}
+"
         if afternoon_slots:
-            res_str += f"☀️ **Afternoon (12:00 - 16:00):** {', '.join(afternoon_slots)}\n"
+            res_str += f"☀️ **Afternoon:** {', '.join(afternoon_slots)}
+"
         if evening_slots:
-            res_str += f"🌆 **Evening (16:00 - 19:00):** {', '.join(evening_slots)}\n"
+            res_str += f"🌆 **Evening:** {', '.join(evening_slots)}
+"
 
         res_str += (
-            f"\n• **Consultation Fee:** ₹{doctor.consultation_fee:.0f}\n"
-            f"• **Location:** {doctor.location}"
+            f"
+• **Consultation Fee:** ₹{doctor.consultation_fee:.0f}
+"
+            f"• **Location:** {doctor.location}
+
+"
+            f"Please let me know which time slot you would like to book!"
         )
         return res_str
     except Exception as e:
@@ -205,15 +266,15 @@ def book_appointment(
     time_str: str = "",
     reason: str = "General Consultation",
 ) -> str:
-    """Book an appointment for a patient with a specific doctor.
+    """Book an appointment for a patient with a specific doctor or department.
 
     Args:
-        patient_id: The patient's string UID.
-        doctor_name: Full or partial name of the doctor.
-        date: Appointment date in YYYY-MM-DD format.
+        patient_id: The patient's string UID (e.g. 'pat-a95bc5aa5d29').
+        doctor_name: Full or partial name of the doctor (e.g. 'Dr. Rajesh Mehta') or department.
+        date: Appointment date in YYYY-MM-DD format (e.g. '2026-09-05').
         date_str: Appointment date in YYYY-MM-DD format.
-        time: Appointment time in HH:MM format (e.g. 10:00 AM or 10:00).
-        time_str: Appointment time in HH:MM format.
+        time: Appointment time in HH:MM or 12h format (e.g. '10:00 AM' or '10:00').
+        time_str: Appointment time in HH:MM or 12h format.
         reason: Reason for the visit (default: 'General Consultation').
     """
     target_date_raw = date or date_str
@@ -221,10 +282,8 @@ def book_appointment(
     if not target_date_raw or not target_time_raw:
         return "Please provide both a date (YYYY-MM-DD) and a time slot (e.g. 10:00 AM) to complete the booking."
 
-    # Normalize time to 24h HH:MM format (handles '10:00 AM', '12 AM', '2pm', etc.)
     target_time_normalized = _normalize_time(target_time_raw)
 
-    # Enforce BOLA authorization check
     auth_uid = state.get("authenticated_patient_uid") if state else None
     if not auth_uid or auth_uid != patient_id:
         log_audit_event(
@@ -234,22 +293,32 @@ def book_appointment(
             patient_uid=patient_id,
             details=f"BOLA mismatch: authenticated as {auth_uid}"
         )
-        return "I'm sorry, but you are not authorized to book an appointment for this patient."
+        return "I'm sorry, but you must be signed in to book an appointment."
 
     db = get_db()
     try:
-        # 1. Find doctor
+        # 1. Find doctor by Name OR Department
         doctor = db.query(Doctor).filter(Doctor.name.ilike(f"%{doctor_name}%")).first()
         if not doctor:
-            return f"Doctor '{doctor_name}' not found."
+            from database.models import Department
+            dept = db.query(Department).filter(Department.name.ilike(f"%{doctor_name}%")).first()
+            if dept:
+                docs = db.query(Doctor).filter(Doctor.department_id == dept.id).all()
+                if docs:
+                    doctor = docs[0]
+            else:
+                doctor = db.query(Doctor).filter(Doctor.specialization.ilike(f"%{doctor_name}%")).first()
+
+        if not doctor:
+            return f"Doctor or department '{doctor_name}' not found. Please specify a doctor like Dr. Rajesh Mehta or a department like Cardiology."
 
         try:
             target_date = datetime.strptime(target_date_raw, "%Y-%m-%d").date()
         except ValueError:
-            return "Invalid date format. Please use YYYY-MM-DD."
+            return "Invalid date format. Please use YYYY-MM-DD (e.g. 2026-09-05)."
 
         if target_date < datetime.now().date():
-            return "Cannot book an appointment in the past."
+            return "Cannot book an appointment in the past. Please select today or a future date."
 
         # Check hospital holiday
         holiday = db.query(DoctorHoliday).filter(DoctorHoliday.date == target_date).first()
@@ -272,17 +341,14 @@ def book_appointment(
             DoctorSchedule.is_active == True
         ).first()
         if not schedule:
-            return f"{doctor.name} does not work on {target_date.strftime('%A')}s."
+            return f"{doctor.name} does not have clinic hours on {target_date.strftime('%A')}s. Please choose another day."
 
-        # Check slot is within working hours
         all_slots = _generate_slots(schedule.start_time, schedule.end_time, schedule.slot_duration_mins)
         if target_time_normalized not in all_slots:
-            # Try a fuzzy hour-only match (e.g. user said '10' meaning '10:00')
             hour_match = [s for s in all_slots if s.startswith(target_time_normalized.split(':')[0] + ':')]
             if len(hour_match) == 1:
                 target_time_normalized = hour_match[0]
             else:
-                # Format available slots in 12h for user-friendly display
                 display_slots = []
                 for s in all_slots:
                     try:
@@ -290,9 +356,9 @@ def book_appointment(
                         display_slots.append(dt.strftime('%I:%M %p').lstrip('0'))
                     except Exception:
                         display_slots.append(s)
-                return f"The time '{target_time_raw}' is not a valid clinic slot. Available slots are: {', '.join(display_slots)}"
+                return f"The time '{target_time_raw}' is not a valid clinic slot. Valid slots on this day are: {', '.join(display_slots)}"
 
-        # Check the slot is not already taken
+        # ── 2. Check if the slot is ALREADY TAKEN BY ANOTHER PATIENT ──
         existing = (
             db.query(Appointment)
             .filter(
@@ -304,17 +370,100 @@ def book_appointment(
             .first()
         )
         if existing:
-            return (
-                f"Sorry, the {time_str} slot with {doctor.name} on "
-                f"{target_date.strftime('%B %d, %Y')} is already booked."
-            )
+            # Query all remaining free slots on this date
+            booked_times = {
+                row.time for row in db.query(Appointment.time).filter(
+                    Appointment.doctor_id == doctor.id,
+                    Appointment.date == target_date,
+                    Appointment.status == AppointmentStatus.BOOKED,
+                ).all()
+            }
+            open_slots = [s for s in all_slots if s not in booked_times]
 
-        # Retrieve patient record to extract real-time details
+            if open_slots:
+                formatted_free = []
+                for s in open_slots:
+                    try:
+                        dt = datetime.strptime(s, "%H:%M")
+                        formatted_free.append(dt.strftime("%I:%M %p").lstrip("0"))
+                    except Exception:
+                        formatted_free.append(s)
+
+                return (
+                    f"⚠️ **Slot Unavailable:** The `{target_time_raw}` slot with **{doctor.name}** "
+                    f"({doctor.department.name if doctor.department else 'General'}) on "
+                    f"**{target_date.strftime('%A, %B %d, %Y')}** is already booked by another patient.
+
+"
+                    f"💡 **Available Alternative Slots for {doctor.name} on this day:**
+"
+                    f"• {', '.join(formatted_free)}
+
+"
+                    f"Would you like to book one of these available time slots instead?"
+                )
+            else:
+                # Find next available date with free slots
+                next_date = target_date + timedelta(days=1)
+                found_alt = None
+                for _ in range(7):
+                    dow = next_date.weekday()
+                    sch = db.query(DoctorSchedule).filter(
+                        DoctorSchedule.doctor_id == doctor.id,
+                        DoctorSchedule.day_of_week == dow,
+                        DoctorSchedule.is_active == True
+                    ).first()
+                    if sch:
+                        day_booked = {
+                            row.time for row in db.query(Appointment.time).filter(
+                                Appointment.doctor_id == doctor.id,
+                                Appointment.date == next_date,
+                                Appointment.status == AppointmentStatus.BOOKED,
+                            ).all()
+                        }
+                        day_slots = _generate_slots(sch.start_time, sch.end_time, sch.slot_duration_mins)
+                        day_open = [s for s in day_slots if s not in day_booked]
+                        if day_open:
+                            found_alt = (next_date, day_open[:5])
+                            break
+                    next_date += timedelta(days=1)
+
+                if found_alt:
+                    alt_d, alt_s = found_alt
+                    formatted_alt = [datetime.strptime(s, "%H:%M").strftime("%I:%M %p").lstrip("0") for s in alt_s]
+                    return (
+                        f"⚠️ **Fully Booked:** {doctor.name} is fully booked on {target_date.strftime('%A, %B %d, %Y')}.
+
+"
+                        f"💡 **Next Available Date:** **{alt_d.strftime('%A, %B %d, %Y')}**
+"
+                        f"• Open Slots: {', '.join(formatted_alt)}
+
+"
+                        f"Would you like to book an appointment on {alt_d.strftime('%B %d')} instead?"
+                    )
+                else:
+                    return f"Sorry, {doctor.name} has no available slots on {target_date.strftime('%A, %B %d, %Y')}. Please choose another date."
+
+        # ── 3. Check Patient double-booking at the same time ──
+        patient_overlap = (
+            db.query(Appointment)
+            .filter(
+                Appointment.patient_id == patient_id,
+                Appointment.date == target_date,
+                Appointment.time == target_time_normalized,
+                Appointment.status == AppointmentStatus.BOOKED
+            )
+            .first()
+        )
+        if patient_overlap:
+            return f"You already have an appointment booked on {target_date.strftime('%B %d, %Y')} at {target_time_raw} (UID: {patient_overlap.appointment_uid})."
+
+        # ── 4. Retrieve patient details and Create appointment ──
         patient = db.query(Patient).filter(Patient.id == patient_id).first()
-        patient_name = patient.name if patient else "Unknown"
+        patient_name = patient.name if patient else "Patient"
         patient_phone = decrypt_value(patient.phone) if (patient and patient.phone) else "N/A"
 
-        # Create appointment with rich notes
         appt = Appointment(
             appointment_uid=f"appt-{uuid.uuid4().hex[:8]}",
             patient_id=patient_id,
@@ -325,11 +474,18 @@ def book_appointment(
             status=AppointmentStatus.BOOKED,
             reason=reason,
             notes=(
-                f"Booked via MedCare Chatbot.\n"
-                f"Patient Name: {patient_name}\n"
-                f"Phone: {patient_phone}\n"
-                f"Patient UUID: {patient_id}\n"
-                f"Location: {doctor.location}\n"
+                f"Booked via MedCare Chatbot.
+"
+                f"Patient Name: {patient_name}
+"
+                f"Phone: {patient_phone}
+"
+                f"Patient UID: {patient_id}
+"
+                f"Doctor: {doctor.name} ({doctor.specialization})
+"
+                f"Location: {doctor.location}
+"
                 f"Fee: ₹{doctor.consultation_fee:.2f}"
             )
         )
@@ -337,10 +493,8 @@ def book_appointment(
         db.commit()
         db.refresh(appt)
 
-        # Generate invoice number
         bill_no = f"INV-{appt.id}-{int(datetime.now().timestamp())}"
 
-        # 1. Create billing record in billings table
         bill = Billing(
             bill_number=bill_no,
             patient_id=patient_id,
@@ -359,7 +513,6 @@ def book_appointment(
         db.commit()
         db.refresh(bill)
 
-        # 2. Create invoice record in invoices table
         invoice = Invoice(
             invoice_number=bill_no,
             billing_id=bill.id,
@@ -368,7 +521,6 @@ def book_appointment(
         )
         db.add(invoice)
 
-        # 3. Create notification record in notifications table
         notif = Notification(
             patient_id=patient_id,
             message=(
@@ -380,52 +532,72 @@ def book_appointment(
         db.add(notif)
         db.commit()
 
-        # Trigger real-time Admin Telegram & Email alert (non-blocking in background)
-        try:
-            from utils.notifier import notify_admin_booking_completed
-            notify_admin_booking_completed({
-                "appointment_id": appt.id,
-                "patient_name": patient_name,
-                "patient_uid": patient_id,
-                "doctor_name": doctor.name,
-                "department": doctor.department.name if doctor.department else "General",
-                "date": target_date.strftime('%A, %B %d, %Y'),
-                "time_slot": time_str or target_time_normalized,
-                "fee": f"{doctor.consultation_fee:.2f}",
-                "invoice_number": bill_no,
-                "location": doctor.location or f"Room {doctor.room_number}, {doctor.block}",
-                "reason": reason or "General Consultation",
-            })
-        except Exception as ne:
-            print(f"[NOTIFIER ERROR] Failed to dispatch admin alert: {ne}")
-
         log_audit_event(
             request_id="tool-call",
             action="BOOK_APPOINTMENT",
             status="SUCCESS",
             patient_uid=patient_id,
-            resource=f"appointments/{appt.id}"
+            resource=f"appointments/{appt.appointment_uid}",
+            details=f"Appointment {appt.appointment_uid} booked with {doctor.name} on {target_date} at {target_time_normalized}."
         )
 
+        # Send Telegram push alert to Admin
+        try:
+            from services.telegram_auth_service import send_telegram_booking_alert
+            send_telegram_booking_alert({
+                "appointment_uid": appt.appointment_uid,
+                "patient_name": patient_name,
+                "patient_phone": patient_phone,
+                "doctor_name": doctor.name,
+                "department": doctor.department.name if doctor.department else "General",
+                "date": target_date.strftime('%A, %B %d, %Y'),
+                "time": time_str or target_time_normalized,
+                "reason": reason,
+                "fee": doctor.consultation_fee,
+                "invoice_number": bill_no
+            })
+        except Exception as tg_err:
+            print(f"[TELEGRAM ALERT ERROR] Failed to send admin alert: {tg_err}")
+
+        time_display = target_time_raw
+        try:
+            time_display = datetime.strptime(target_time_normalized, "%H:%M").strftime("%I:%M %p").lstrip("0")
+        except Exception:
+            pass
+
         return (
-            f"✅ **Appointment Booked Successfully!**\n\n"
-            f"• **Appointment ID:** #{appt.id}\n"
-            f"• **Doctor:** {doctor.name} ({doctor.specialization})\n"
-            f"• **Date:** {target_date.strftime('%A, %B %d, %Y')}\n"
-            f"• **Time:** {time_str}\n"
-            f"• **Location:** {doctor.location}\n"
-            f"• **Consultation Fee:** ₹{doctor.consultation_fee:.2f} (To be paid at desk)\n"
-            f"• **Invoice:** {bill_no}\n\n"
-            f"Please arrive 15 minutes early for check-in. Thank you!"
+            f"✅ **Appointment Confirmed Successfully!**
+
+"
+            f"• **Appointment ID:** `{appt.appointment_uid}`
+"
+            f"• **Patient Name:** {patient_name}
+"
+            f"• **Doctor:** {doctor.name} ({doctor.specialization})
+"
+            f"• **Department:** {doctor.department.name if doctor.department else 'General'}
+"
+            f"• **Date:** {target_date.strftime('%A, %B %d, %Y')}
+"
+            f"• **Time:** **{time_display}**
+"
+            f"• **Location:** {doctor.location}
+"
+            f"• **Consultation Fee:** ₹{doctor.consultation_fee:.0f}
+"
+            f"• **Invoice Number:** `{bill_no}`
+
+"
+            f"An SMS & Telegram confirmation has been sent to your registered number."
         )
     except Exception as e:
         db.rollback()
         log_audit_event(
             request_id="tool-call",
             action="BOOK_APPOINTMENT",
-            status="FAILED",
+            status="ERROR",
             patient_uid=patient_id,
-            details=f"Booking error: {e}"
+            details=f"Database error during booking: {e}"
         )
         return f"Error booking appointment: {e}"
     finally:
