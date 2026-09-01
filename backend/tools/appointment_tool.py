@@ -31,7 +31,6 @@ def _normalize_time(raw_time: str) -> str:
     if not t:
         return t
 
-    # Try common 12h formats: '10:00 AM', '2:30pm', '12 AM', '9am'
     m = _re.match(r'^(\d{1,2})(?::(\d{2}))?\s*(am|pm|AM|PM|a\.m\.|p\.m\.)$', t)
     if m:
         hour = int(m.group(1))
@@ -45,7 +44,6 @@ def _normalize_time(raw_time: str) -> str:
                 hour += 12
         return f"{hour:02d}:{minute:02d}"
 
-    # Try 24h format: '14:00', '09:30'
     m2 = _re.match(r'^(\d{1,2}):(\d{2})$', t)
     if m2:
         return f"{int(m2.group(1)):02d}:{m2.group(2)}"
@@ -80,14 +78,9 @@ def check_doctor_availability(doctor_name: str, date: str = "", date_str: str = 
         if not target_date_raw:
             return "Please provide a date in YYYY-MM-DD format (e.g. 2026-09-05)."
 
-        # Find doctor by Name OR by Department
-        doctor = (
-            db.query(Doctor)
-            .filter(Doctor.name.ilike(f"%{doctor_name}%"))
-            .first()
-        )
+        # Find doctor by Name OR Department
+        doctor = db.query(Doctor).filter(Doctor.name.ilike(f"%{doctor_name}%")).first()
         if not doctor:
-            # Try searching by specialization or department
             from database.models import Department
             dept = db.query(Department).filter(Department.name.ilike(f"%{doctor_name}%")).first()
             if dept:
@@ -100,7 +93,6 @@ def check_doctor_availability(doctor_name: str, date: str = "", date_str: str = 
         if not doctor:
             return f"Sorry, I could not find a doctor or department matching '{doctor_name}'. Please check the specialist name or department."
 
-        # Parse date
         try:
             target_date = datetime.strptime(target_date_raw, "%Y-%m-%d").date()
         except ValueError:
@@ -109,12 +101,10 @@ def check_doctor_availability(doctor_name: str, date: str = "", date_str: str = 
         if target_date < datetime.now().date():
             return "That date is in the past. Please choose today or a future date."
 
-        # Check hospital holiday
         holiday = db.query(DoctorHoliday).filter(DoctorHoliday.date == target_date).first()
         if holiday:
             return f"Sorry, the hospital is closed on {target_date.strftime('%A, %B %d, %Y')} due to a holiday: '{holiday.name}'."
 
-        # Check doctor leave
         leave = db.query(DoctorLeave).filter(
             DoctorLeave.doctor_id == doctor.id,
             DoctorLeave.date == target_date
@@ -122,9 +112,8 @@ def check_doctor_availability(doctor_name: str, date: str = "", date_str: str = 
         if leave:
             return f"Sorry, {doctor.name} is on leave on {target_date.strftime('%A, %B %d, %Y')} (Reason: {leave.reason or 'Out of Office'})."
 
-        day_of_week = target_date.weekday()  # 0=Mon … 6=Sun
+        day_of_week = target_date.weekday()
 
-        # Get schedule for that day
         schedule = (
             db.query(DoctorSchedule)
             .filter(
@@ -141,12 +130,10 @@ def check_doctor_availability(doctor_name: str, date: str = "", date_str: str = 
                 f"Please try another day of the week."
             )
 
-        # All possible slots for doctor
         all_slots = _generate_slots(
             schedule.start_time, schedule.end_time, schedule.slot_duration_mins
         )
 
-        # Already-booked slots
         booked = (
             db.query(Appointment.time)
             .filter(
@@ -160,7 +147,6 @@ def check_doctor_availability(doctor_name: str, date: str = "", date_str: str = 
         open_slots = [s for s in all_slots if s not in booked_times]
 
         if not open_slots:
-            # Find next available date with free slots
             next_date = target_date + timedelta(days=1)
             found_alt = None
             for _ in range(10):
@@ -189,20 +175,14 @@ def check_doctor_availability(doctor_name: str, date: str = "", date_str: str = 
                 alt_d, alt_s = found_alt
                 friendly_s = [datetime.strptime(s, "%H:%M").strftime("%I:%M %p").lstrip("0") for s in alt_s]
                 return (
-                    f"⚠️ **Fully Booked:** {doctor.name} is fully booked on {target_date.strftime('%A, %B %d, %Y')}.
-
-"
-                    f"💡 **Next Available Date:** **{alt_d.strftime('%A, %B %d, %Y')}**
-"
-                    f"• Available Slots: {', '.join(friendly_s)}
-
-"
+                    f"⚠️ **Fully Booked:** {doctor.name} is fully booked on {target_date.strftime('%A, %B %d, %Y')}.\n\n"
+                    f"💡 **Next Available Date:** **{alt_d.strftime('%A, %B %d, %Y')}**\n"
+                    f"• Available Slots: {', '.join(friendly_s)}\n\n"
                     f"Would you like to schedule an appointment on this date instead?"
                 )
             else:
                 return f"Sorry, {doctor.name} is fully booked on {target_date.strftime('%A, %B %d, %Y')}. Please choose another date."
 
-        # Classify slots into Morning, Afternoon, and Evening suggestions
         morning_slots = []
         afternoon_slots = []
         evening_slots = []
@@ -223,29 +203,19 @@ def check_doctor_availability(doctor_name: str, date: str = "", date_str: str = 
 
         res_str = (
             f"📅 **Available Slots for {doctor.name}** "
-            f"({doctor.department.name if doctor.department else 'Specialist'}, {doctor.specialization})
-"
-            f"📆 **Date:** {target_date.strftime('%A, %B %d, %Y')}
-
-"
+            f"({doctor.department.name if doctor.department else 'Specialist'}, {doctor.specialization})\n"
+            f"📆 **Date:** {target_date.strftime('%A, %B %d, %Y')}\n\n"
         )
         if morning_slots:
-            res_str += f"🌅 **Morning:** {', '.join(morning_slots)}
-"
+            res_str += f"🌅 **Morning:** {', '.join(morning_slots)}\n"
         if afternoon_slots:
-            res_str += f"☀️ **Afternoon:** {', '.join(afternoon_slots)}
-"
+            res_str += f"☀️ **Afternoon:** {', '.join(afternoon_slots)}\n"
         if evening_slots:
-            res_str += f"🌆 **Evening:** {', '.join(evening_slots)}
-"
+            res_str += f"🌆 **Evening:** {', '.join(evening_slots)}\n"
 
         res_str += (
-            f"
-• **Consultation Fee:** ₹{doctor.consultation_fee:.0f}
-"
-            f"• **Location:** {doctor.location}
-
-"
+            f"\n• **Consultation Fee:** ₹{doctor.consultation_fee:.0f}\n"
+            f"• **Location:** {doctor.location}\n\n"
             f"Please let me know which time slot you would like to book!"
         )
         return res_str
@@ -297,7 +267,6 @@ def book_appointment(
 
     db = get_db()
     try:
-        # 1. Find doctor by Name OR Department
         doctor = db.query(Doctor).filter(Doctor.name.ilike(f"%{doctor_name}%")).first()
         if not doctor:
             from database.models import Department
@@ -320,12 +289,10 @@ def book_appointment(
         if target_date < datetime.now().date():
             return "Cannot book an appointment in the past. Please select today or a future date."
 
-        # Check hospital holiday
         holiday = db.query(DoctorHoliday).filter(DoctorHoliday.date == target_date).first()
         if holiday:
             return f"Failed to book: The hospital is closed on {target_date.strftime('%B %d, %Y')} due to: '{holiday.name}'."
 
-        # Check doctor leave
         leave = db.query(DoctorLeave).filter(
             DoctorLeave.doctor_id == doctor.id,
             DoctorLeave.date == target_date
@@ -333,7 +300,6 @@ def book_appointment(
         if leave:
             return f"Failed to book: {doctor.name} is on leave on {target_date.strftime('%B %d, %Y')} ({leave.reason or 'Out of Office'})."
 
-        # Check doctor schedule day
         day_of_week = target_date.weekday()
         schedule = db.query(DoctorSchedule).filter(
             DoctorSchedule.doctor_id == doctor.id,
@@ -358,7 +324,6 @@ def book_appointment(
                         display_slots.append(s)
                 return f"The time '{target_time_raw}' is not a valid clinic slot. Valid slots on this day are: {', '.join(display_slots)}"
 
-        # ── 2. Check if the slot is ALREADY TAKEN BY ANOTHER PATIENT ──
         existing = (
             db.query(Appointment)
             .filter(
@@ -370,7 +335,6 @@ def book_appointment(
             .first()
         )
         if existing:
-            # Query all remaining free slots on this date
             booked_times = {
                 row.time for row in db.query(Appointment.time).filter(
                     Appointment.doctor_id == doctor.id,
@@ -392,18 +356,12 @@ def book_appointment(
                 return (
                     f"⚠️ **Slot Unavailable:** The `{target_time_raw}` slot with **{doctor.name}** "
                     f"({doctor.department.name if doctor.department else 'General'}) on "
-                    f"**{target_date.strftime('%A, %B %d, %Y')}** is already booked by another patient.
-
-"
-                    f"💡 **Available Alternative Slots for {doctor.name} on this day:**
-"
-                    f"• {', '.join(formatted_free)}
-
-"
+                    f"**{target_date.strftime('%A, %B %d, %Y')}** is already booked by another patient.\n\n"
+                    f"💡 **Available Alternative Slots for {doctor.name} on this day:**\n"
+                    f"• {', '.join(formatted_free)}\n\n"
                     f"Would you like to book one of these available time slots instead?"
                 )
             else:
-                # Find next available date with free slots
                 next_date = target_date + timedelta(days=1)
                 found_alt = None
                 for _ in range(7):
@@ -432,20 +390,14 @@ def book_appointment(
                     alt_d, alt_s = found_alt
                     formatted_alt = [datetime.strptime(s, "%H:%M").strftime("%I:%M %p").lstrip("0") for s in alt_s]
                     return (
-                        f"⚠️ **Fully Booked:** {doctor.name} is fully booked on {target_date.strftime('%A, %B %d, %Y')}.
-
-"
-                        f"💡 **Next Available Date:** **{alt_d.strftime('%A, %B %d, %Y')}**
-"
-                        f"• Open Slots: {', '.join(formatted_alt)}
-
-"
+                        f"⚠️ **Fully Booked:** {doctor.name} is fully booked on {target_date.strftime('%A, %B %d, %Y')}.\n\n"
+                        f"💡 **Next Available Date:** **{alt_d.strftime('%A, %B %d, %Y')}**\n"
+                        f"• Open Slots: {', '.join(formatted_alt)}\n\n"
                         f"Would you like to book an appointment on {alt_d.strftime('%B %d')} instead?"
                     )
                 else:
                     return f"Sorry, {doctor.name} has no available slots on {target_date.strftime('%A, %B %d, %Y')}. Please choose another date."
 
-        # ── 3. Check Patient double-booking at the same time ──
         patient_overlap = (
             db.query(Appointment)
             .filter(
@@ -459,7 +411,6 @@ def book_appointment(
         if patient_overlap:
             return f"You already have an appointment booked on {target_date.strftime('%B %d, %Y')} at {target_time_raw} (UID: {patient_overlap.appointment_uid})."
 
-        # ── 4. Retrieve patient details and Create appointment ──
         patient = db.query(Patient).filter(Patient.id == patient_id).first()
         patient_name = patient.name if patient else "Patient"
         patient_phone = decrypt_value(patient.phone) if (patient and patient.phone) else "N/A"
@@ -474,18 +425,12 @@ def book_appointment(
             status=AppointmentStatus.BOOKED,
             reason=reason,
             notes=(
-                f"Booked via MedCare Chatbot.
-"
-                f"Patient Name: {patient_name}
-"
-                f"Phone: {patient_phone}
-"
-                f"Patient UID: {patient_id}
-"
-                f"Doctor: {doctor.name} ({doctor.specialization})
-"
-                f"Location: {doctor.location}
-"
+                f"Booked via MedCare Chatbot.\n"
+                f"Patient Name: {patient_name}\n"
+                f"Phone: {patient_phone}\n"
+                f"Patient UID: {patient_id}\n"
+                f"Doctor: {doctor.name} ({doctor.specialization})\n"
+                f"Location: {doctor.location}\n"
                 f"Fee: ₹{doctor.consultation_fee:.2f}"
             )
         )
@@ -541,7 +486,6 @@ def book_appointment(
             details=f"Appointment {appt.appointment_uid} booked with {doctor.name} on {target_date} at {target_time_normalized}."
         )
 
-        # Send Telegram push alert to Admin
         try:
             from services.telegram_auth_service import send_telegram_booking_alert
             send_telegram_booking_alert({
@@ -566,28 +510,16 @@ def book_appointment(
             pass
 
         return (
-            f"✅ **Appointment Confirmed Successfully!**
-
-"
-            f"• **Appointment ID:** `{appt.appointment_uid}`
-"
-            f"• **Patient Name:** {patient_name}
-"
-            f"• **Doctor:** {doctor.name} ({doctor.specialization})
-"
-            f"• **Department:** {doctor.department.name if doctor.department else 'General'}
-"
-            f"• **Date:** {target_date.strftime('%A, %B %d, %Y')}
-"
-            f"• **Time:** **{time_display}**
-"
-            f"• **Location:** {doctor.location}
-"
-            f"• **Consultation Fee:** ₹{doctor.consultation_fee:.0f}
-"
-            f"• **Invoice Number:** `{bill_no}`
-
-"
+            f"✅ **Appointment Confirmed Successfully!**\n\n"
+            f"• **Appointment ID:** `{appt.appointment_uid}`\n"
+            f"• **Patient Name:** {patient_name}\n"
+            f"• **Doctor:** {doctor.name} ({doctor.specialization})\n"
+            f"• **Department:** {doctor.department.name if doctor.department else 'General'}\n"
+            f"• **Date:** {target_date.strftime('%A, %B %d, %Y')}\n"
+            f"• **Time:** **{time_display}**\n"
+            f"• **Location:** {doctor.location}\n"
+            f"• **Consultation Fee:** ₹{doctor.consultation_fee:.0f}\n"
+            f"• **Invoice Number:** `{bill_no}`\n\n"
             f"An SMS & Telegram confirmation has been sent to your registered number."
         )
     except Exception as e:
@@ -605,39 +537,54 @@ def book_appointment(
 
 
 @tool
-def cancel_appointment(appointment_id: int, state: Annotated[dict, InjectedState]) -> str:
-    """Cancel an existing appointment by its appointment ID.
+def cancel_appointment(
+    patient_id: str,
+    appointment_id: str,
+    state: Annotated[dict, InjectedState],
+    reason: str = "Patient Request"
+) -> str:
+    """Cancel an existing appointment.
 
     Args:
-        appointment_id: The numeric ID of the appointment to cancel.
-
-    Use this when the user wants to cancel a specific appointment.
+        patient_id: The patient's string UID.
+        appointment_id: The appointment ID or UID to cancel (e.g. 'appt-12345678' or '1').
+        reason: Reason for cancellation.
     """
+    auth_uid = state.get("authenticated_patient_uid") if state else None
+    if not auth_uid or auth_uid != patient_id:
+        log_audit_event(
+            request_id="tool-call",
+            action="CANCEL_APPOINTMENT",
+            status="FAILED",
+            patient_uid=patient_id,
+            details=f"BOLA mismatch: authenticated as {auth_uid}"
+        )
+        return "I'm sorry, but you are not authorized to cancel this appointment."
+
     db = get_db()
     try:
-        appt = db.query(Appointment).filter(Appointment.id == appointment_id).first()
+        appt = None
+        if appointment_id.isdigit():
+            appt = db.query(Appointment).filter(Appointment.id == int(appointment_id)).first()
         if not appt:
-            return f"Appointment #{appointment_id} not found."
+            appt = db.query(Appointment).filter(Appointment.appointment_uid == appointment_id).first()
 
-        # Enforce BOLA authorization check
-        auth_uid = state.get("authenticated_patient_uid") if state else None
-        if not auth_uid or auth_uid != appt.patient_id:
+        if not appt:
+            return f"Appointment with ID '{appointment_id}' was not found."
+
+        if appt.patient_id != patient_id:
             log_audit_event(
                 request_id="tool-call",
                 action="CANCEL_APPOINTMENT",
                 status="FAILED",
-                patient_uid=appt.patient_id,
-                details=f"Unauthorized cancel attempt for appt #{appointment_id} by authenticated user {auth_uid}"
+                patient_uid=patient_id,
+                details=f"BOLA violation attempt for appointment {appt.id}"
             )
-            return "I'm sorry, but you are not authorized to cancel this appointment."
+            return "You are not authorized to cancel another patient's appointment."
 
         if appt.status == AppointmentStatus.CANCELLED:
-            return f"Appointment #{appointment_id} is already cancelled."
+            return f"Appointment {appt.appointment_uid} is already cancelled."
 
-        if appt.status == AppointmentStatus.COMPLETED:
-            return f"Appointment #{appointment_id} has already been completed and cannot be cancelled."
-
-        doctor = db.query(Doctor).filter(Doctor.id == appt.doctor_id).first()
         appt.status = AppointmentStatus.CANCELLED
         db.commit()
 
@@ -645,25 +592,21 @@ def cancel_appointment(appointment_id: int, state: Annotated[dict, InjectedState
             request_id="tool-call",
             action="CANCEL_APPOINTMENT",
             status="SUCCESS",
-            patient_uid=appt.patient_id,
-            resource=f"appointments/{appointment_id}"
+            patient_uid=patient_id,
+            resource=f"appointments/{appt.appointment_uid}",
+            details=f"Appointment cancelled. Reason: {reason}"
         )
 
         return (
-            f"✅ Appointment #{appointment_id} has been cancelled.\n\n"
-            f"**Doctor:** {doctor.name if doctor else 'N/A'}\n"
-            f"**Date:** {appt.date.strftime('%A, %B %d, %Y')}\n"
-            f"**Time:** {appt.time}\n\n"
-            f"If you'd like to rebook, just let me know!"
+            f"✅ **Appointment Cancelled Successfully.**\n\n"
+            f"• **Appointment ID:** `{appt.appointment_uid}`\n"
+            f"• **Doctor:** {appt.doctor.name if appt.doctor else 'Doctor'}\n"
+            f"• **Date:** {appt.date}\n"
+            f"• **Status:** CANCELLED\n\n"
+            f"If you need to reschedule, simply let me know a preferred date and time!"
         )
     except Exception as e:
         db.rollback()
-        log_audit_event(
-            request_id="tool-call",
-            action="CANCEL_APPOINTMENT",
-            status="FAILED",
-            details=f"Cancellation error: {e}"
-        )
         return f"Error cancelling appointment: {e}"
     finally:
         db.close()
@@ -671,15 +614,11 @@ def cancel_appointment(appointment_id: int, state: Annotated[dict, InjectedState
 
 @tool
 def get_patient_appointments(patient_id: str, state: Annotated[dict, InjectedState]) -> str:
-    """Get all upcoming and recent appointments for a patient.
+    """Retrieve all upcoming and past appointments for a patient.
 
     Args:
-        patient_id: The patient's string UID.
-
-    Use this when the user wants to see their scheduled appointments or
-    appointment history.
+        patient_id: The unique patient UID (e.g. 'pat-a95bc5aa5d29').
     """
-    # Enforce BOLA authorization check
     auth_uid = state.get("authenticated_patient_uid") if state else None
     if not auth_uid or auth_uid != patient_id:
         log_audit_event(
@@ -689,63 +628,49 @@ def get_patient_appointments(patient_id: str, state: Annotated[dict, InjectedSta
             patient_uid=patient_id,
             details=f"BOLA mismatch: authenticated as {auth_uid}"
         )
-        return "I'm sorry, but you are not authorized to view appointments for this patient."
+        return "I'm sorry, but you are not authorized to view these appointments."
 
     db = get_db()
     try:
-        appointments = (
+        appts = (
             db.query(Appointment)
             .filter(Appointment.patient_id == patient_id)
-            .order_by(Appointment.date.desc(), Appointment.time.desc())
+            .order_by(Appointment.date.desc())
             .all()
         )
 
-        if not appointments:
-            log_audit_event(
-                request_id="tool-call",
-                action="VIEW_APPOINTMENTS",
-                status="SUCCESS",
-                patient_uid=patient_id,
-                details="No appointments found."
+        if not appts:
+            return "You have no appointments on record. Would you like to book one?"
+
+        lines = ["📅 **Your Appointments:**\n"]
+        for a in appts:
+            doc_name = a.doctor.name if a.doctor else "Unknown Doctor"
+            dept_name = a.department or (a.doctor.department.name if a.doctor and a.doctor.department else "General")
+            st = a.status.value if hasattr(a.status, 'value') else str(a.status)
+            status_icon = "🟢" if st == "booked" else ("⚪" if st == "completed" else "🔴")
+            
+            time_disp = a.time
+            try:
+                time_disp = datetime.strptime(a.time, "%H:%M").strftime("%I:%M %p").lstrip("0")
+            except Exception:
+                pass
+
+            lines.append(
+                f"• {status_icon} **{a.date.strftime('%b %d, %Y')}** at **{time_disp}**\n"
+                f"  Doctor: **{doc_name}** ({dept_name})\n"
+                f"  UID: `{a.appointment_uid}` | Status: **{st.upper()}**\n"
+                f"  Reason: {a.reason or 'Consultation'}\n"
             )
-            return "You have no appointments on record."
-
-        upcoming = []
-        past = []
-        today = date.today()
-
-        for appt in appointments:
-            doctor = db.query(Doctor).filter(Doctor.id == appt.doctor_id).first()
-            doc_name = doctor.name if doctor else "Unknown"
-            line = (
-                f"• **Appointment #{appt.id}** — {doc_name} ({appt.department})\n"
-                f"  Date: {appt.date.strftime('%A, %B %d, %Y')} at {appt.time}\n"
-                f"  Status: {appt.status.value.capitalize()}\n"
-                f"  Reason: {appt.reason or 'N/A'}"
-            )
-            if appt.date >= today and appt.status == AppointmentStatus.BOOKED:
-                upcoming.append(line)
-            else:
-                past.append(line)
-
-        parts = []
-        if upcoming:
-            parts.append("**📅 Upcoming Appointments:**\n" + "\n\n".join(upcoming))
-        if past:
-            parts.append("**📋 Past / Other Appointments:**\n" + "\n\n".join(past[:5]))
 
         log_audit_event(
             request_id="tool-call",
             action="VIEW_APPOINTMENTS",
             status="SUCCESS",
             patient_uid=patient_id,
-            resource=f"appointments/patient/{patient_id}"
+            details=f"Retrieved {len(appts)} appointments."
         )
 
-        if not upcoming and not past:
-            return "You have no appointments on record."
-
-        return "\n\n".join(parts)
+        return "\n".join(lines)
     except Exception as e:
         return f"Error retrieving appointments: {e}"
     finally:
