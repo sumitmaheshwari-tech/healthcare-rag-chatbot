@@ -79,8 +79,8 @@ class Settings:
     CACHE_RESPONSE_TTL: int = int(os.getenv("CACHE_RESPONSE_TTL", "600"))     # 10 min
 
     # Admin Notifications (Telegram & Email)
-    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    TELEGRAM_ADMIN_CHAT_ID: str = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "")
+    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "8662117383:AAHl1cTXSYsrA2jraHSQW7ZWxQJzsfLJm1U")
+    TELEGRAM_ADMIN_CHAT_ID: str = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "8608906450")
     SMTP_EMAIL: str = os.getenv("SMTP_EMAIL", "")
     SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
     ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "")
