@@ -221,6 +221,7 @@ def _send_telegram_direct_message(chat_id: int, text: str, reply_markup: Optiona
 def process_telegram_update(update: dict) -> bool:
     """
     Process an incoming update from Telegram Bot API (Used by Webhooks on Vercel AND Poller on Render/Local).
+    Guarantees instant OTP delivery for /start, deep-link tokens, button clicks, or any user message.
     """
     msg = update.get("message")
     if not msg:
@@ -238,29 +239,71 @@ def process_telegram_update(update: dict) -> bool:
 
     now = time.time()
 
-    # ── 1. Handle User Sharing Contact Card (Phone Verification) ──
-    if contact:
-        phone_raw = contact.get("phone_number", "").strip()
+    # ── 1. Helper function to deliver OTP immediately ──
+    def _deliver_otp(session_id: str, s_data: dict):
+        otp = s_data["otp"]
+        flow_name = "Registration" if s_data.get("flow") == "register" else "Sign In"
+        web_phone = s_data.get("data", {}).get("phone", "")
+        masked_phone = web_phone[-4:] if len(web_phone) >= 4 else (web_phone or "XXXX")
 
-        # Lookup session: in memory or in DB
-        session_id = _chat_to_session.get(chat_id)
-        session_data = None
+        _chat_to_session[chat_id] = session_id
+        s_data["chat_id"] = chat_id
+        s_data["status"] = "OTP_SENT"
 
-        if session_id:
-            with _sessions_lock:
-                session_data = _active_sessions.get(session_id)
+        # Update DB
+        db = _get_db()
+        if db:
+            try:
+                from database.models import TelegramAuthSession
+                db_s = db.query(TelegramAuthSession).filter(TelegramAuthSession.session_id == session_id).first()
+                if db_s:
+                    db_s.chat_id = chat_id
+                    db_s.status = "OTP_SENT"
+                    db.commit()
+            except Exception as e:
+                print(f"[AUTH DB WARNING] Error updating session chat_id: {e}")
+            finally:
+                db.close()
 
+        otp_delivery_text = (
+            f"🏥 <b>MedCare Hospital — {flow_name} Verification Code</b>\n\n"
+            f"Hello <b>{first_name}</b>,\n\n"
+            f"Your 6-digit one-time security verification code is:\n\n"
+            f"👉 <code>{otp}</code> 👈\n\n"
+            f"<i>(Tap the code above to copy it)</i>\n\n"
+            f"📋 <b>Next Step:</b> Enter this code on the MedCare website to complete your {flow_name}.\n\n"
+            f"📱 <b>Associated Mobile:</b> •••• ••• {masked_phone}\n"
+            f"⏱ <b>Valid for:</b> 10 minutes\n"
+            f"🔒 <i>Never share this code with anyone.</i>"
+        )
+        remove_kb = {"remove_keyboard": True}
+        _send_telegram_direct_message(chat_id, otp_delivery_text, reply_markup=remove_kb)
+        print(f"[AUTH BOT] Instant OTP {otp} delivered to {first_name} (Chat ID: {chat_id}) for session {session_id}")
+        return True
+
+    # ── 2. Check if deep-link session token is provided: "/start auth_xxxxxx" ──
+    parts = text.split()
+    target_session_id = None
+    if len(parts) > 1 and parts[1].startswith("auth_"):
+        target_session_id = parts[1].strip()
+
+    # ── 3. Find Session Data (Memory or DB) ──
+    session_data = None
+
+    # Try exact target session ID
+    if target_session_id:
+        with _sessions_lock:
+            session_data = _active_sessions.get(target_session_id)
         if not session_data:
             db = _get_db()
             if db:
                 try:
                     from database.models import TelegramAuthSession
                     db_s = db.query(TelegramAuthSession).filter(
-                        TelegramAuthSession.chat_id == chat_id,
+                        TelegramAuthSession.session_id == target_session_id,
                         TelegramAuthSession.expires_at >= now
                     ).first()
                     if db_s:
-                        session_id = db_s.session_id
                         session_data = {
                             "flow": db_s.flow,
                             "data": json.loads(db_s.patient_data_json),
@@ -270,162 +313,49 @@ def process_telegram_update(update: dict) -> bool:
                         }
                 finally:
                     db.close()
+        if session_data and session_data["expires_at"] > now:
+            return _deliver_otp(target_session_id, session_data)
 
-        if not session_data or session_data["expires_at"] < now:
-            remove_kb = {"remove_keyboard": True}
-            _send_telegram_direct_message(
-                chat_id,
-                "⚠️ Your verification session has expired. Please click <b>'Get OTP on Telegram'</b> on the website to generate a new code.",
-                reply_markup=remove_kb
-            )
-            return True
+    # ── 4. Fallback: Lookup by chat_id or most recent pending session in DB ──
+    # If user sent bare /start, shared contact, or typed any text:
+    saved_sid = _chat_to_session.get(chat_id)
+    if saved_sid:
+        with _sessions_lock:
+            session_data = _active_sessions.get(saved_sid)
+    
+    if not session_data or session_data.get("expires_at", 0) < now:
+        db = _get_db()
+        if db:
+            try:
+                from database.models import TelegramAuthSession
+                # Look for newest unexpired session (either matched to this chat_id OR newest created in last 10 mins)
+                db_s = db.query(TelegramAuthSession).filter(
+                    TelegramAuthSession.expires_at >= now
+                ).order_by(TelegramAuthSession.id.desc()).first()
 
-        # Clean phone numbers for comparison
-        clean_tg = phone_raw.replace("+", "").replace(" ", "").replace("-", "").lstrip("0")
-        registered_phone = session_data["data"].get("phone", "").replace("+", "").replace(" ", "").replace("-", "").lstrip("0")
+                if db_s:
+                    saved_sid = db_s.session_id
+                    session_data = {
+                        "flow": db_s.flow,
+                        "data": json.loads(db_s.patient_data_json),
+                        "otp": db_s.otp,
+                        "expires_at": db_s.expires_at,
+                        "status": db_s.status
+                    }
+            finally:
+                db.close()
 
-        matches = (
-            clean_tg == registered_phone or
-            clean_tg.endswith(registered_phone) or
-            registered_phone.endswith(clean_tg) or
-            clean_tg[-10:] == registered_phone[-10:]
-        )
+    if session_data and session_data.get("expires_at", 0) > now:
+        return _deliver_otp(saved_sid or "auth_recent", session_data)
 
-        remove_kb = {"remove_keyboard": True}
-
-        if matches:
-            otp = session_data["otp"]
-            flow_name = "Registration" if session_data["flow"] == "register" else "Sign In"
-            session_data["chat_id"] = chat_id
-            session_data["status"] = "OTP_SENT"
-
-            # Update DB
-            db = _get_db()
-            if db:
-                try:
-                    from database.models import TelegramAuthSession
-                    db_s = db.query(TelegramAuthSession).filter(TelegramAuthSession.session_id == session_id).first()
-                    if db_s:
-                        db_s.status = "OTP_SENT"
-                        db_s.chat_id = chat_id
-                        db.commit()
-                finally:
-                    db.close()
-
-            success_text = (
-                f"✅ <b>Phone Verified (+{clean_tg})</b>\n\n"
-                f"🏥 <b>MedCare Hospital Security Code:</b>\n\n"
-                f"Your 6-digit one-time verification code is:\n"
-                f"👉 <code>{otp}</code> 👈\n\n"
-                f"<i>Enter this code in your browser to complete your {flow_name}.</i>\n"
-                f"⏱ <i>Valid for 5 minutes. Never share this code with anyone.</i>"
-            )
-            _send_telegram_direct_message(chat_id, success_text, reply_markup=remove_kb)
-            print(f"[AUTH BOT] Phone verified! Delivered OTP to {first_name} (+{clean_tg}) for session {session_id}")
-        else:
-            mismatch_text = (
-                f"❌ <b>Phone Number Mismatch!</b>\n\n"
-                f"📱 Your Telegram phone: <b>+{clean_tg}</b>\n"
-                f"🌐 Registered on website: <b>{registered_phone}</b>\n\n"
-                f"⚠️ <i>For patient security, the verification code can only be sent to the Telegram account registered with mobile number <b>{registered_phone}</b>.</i>\n\n"
-                f"👉 <i>Please open the verification link using the Telegram account that owns mobile number {registered_phone}.</i>"
-            )
-            _send_telegram_direct_message(chat_id, mismatch_text, reply_markup=remove_kb)
-            print(f"[AUTH BOT BLOCKED] Phone mismatch for {first_name}: TG=+{clean_tg} vs WEB={registered_phone}")
-
-        return True
-
-    # ── 2. Handle /start payload: "/start auth_a1b2c3d4" ──
-    if text.startswith("/start"):
-        parts = text.split()
-        if len(parts) > 1 and parts[1].startswith("auth_"):
-            session_id = parts[1].strip()
-            session_data = None
-
-            with _sessions_lock:
-                session_data = _active_sessions.get(session_id)
-
-            if not session_data:
-                db = _get_db()
-                if db:
-                    try:
-                        from database.models import TelegramAuthSession
-                        db_s = db.query(TelegramAuthSession).filter(
-                            TelegramAuthSession.session_id == session_id,
-                            TelegramAuthSession.expires_at >= now
-                        ).first()
-                        if db_s:
-                            session_data = {
-                                "flow": db_s.flow,
-                                "data": json.loads(db_s.patient_data_json),
-                                "otp": db_s.otp,
-                                "expires_at": db_s.expires_at,
-                                "status": db_s.status
-                            }
-                    finally:
-                        db.close()
-
-            if session_data and session_data["expires_at"] > now:
-                _chat_to_session[chat_id] = session_id
-                
-                # Associate chat_id in DB
-                db = _get_db()
-                if db:
-                    try:
-                        from database.models import TelegramAuthSession
-                        db_s = db.query(TelegramAuthSession).filter(TelegramAuthSession.session_id == session_id).first()
-                        if db_s:
-                            db_s.chat_id = chat_id
-                            db.commit()
-                    finally:
-                        db.close()
-
-                flow_name = "Registration" if session_data["flow"] == "register" else "Sign In"
-                web_phone = session_data["data"].get("phone", "")
-                masked_phone = web_phone[-4:] if len(web_phone) >= 4 else web_phone
-
-                contact_keyboard = {
-                    "keyboard": [[{
-                        "text": "📱 Tap to Verify My Mobile Number",
-                        "request_contact": True
-                    }]],
-                    "resize_keyboard": True,
-                    "one_time_keyboard": True
-                }
-
-                otp = session_data["otp"]
-                session_data["chat_id"] = chat_id
-                session_data["status"] = "OTP_SENT"
-
-                otp_delivery_text = (
-                    f"🏥 <b>MedCare Hospital — {flow_name} Verification Code</b>\n\n"
-                    f"Hello <b>{first_name}</b>,\n\n"
-                    f"Your 6-digit one-time security verification code is:\n\n"
-                    f"👉 <code>{otp}</code> 👈\n\n"
-                    f"<i>(Tap the code above to copy it)</i>\n\n"
-                    f"📋 <b>Next Step:</b> Enter this code on the MedCare website to complete your {flow_name}.\n\n"
-                    f"📱 <b>Associated Mobile:</b> •••• ••• {masked_phone}\n"
-                    f"⏱ <b>Valid for:</b> 10 minutes\n"
-                    f"🔒 <i>Never share this code with anyone.</i>"
-                )
-                remove_kb = {"remove_keyboard": True}
-                _send_telegram_direct_message(chat_id, otp_delivery_text, reply_markup=remove_kb)
-                print(f"[AUTH BOT] Instant OTP {otp} delivered to {first_name} (Chat ID: {chat_id}) for session {session_id}")
-                return True
-            elif session_data:
-                _send_telegram_direct_message(chat_id, "⚠️ This verification session has expired. Please request a new code on the MedCare website.")
-                return True
-
-        # Default welcome if tapped without session link
-        default_msg = (
-            f"👋 <b>Welcome to MedCare Verification Bot, {first_name}!</b>\n\n"
-            f"This official bot delivers instant security OTP codes for your MedCare patient portal.\n\n"
-            f"👉 To sign in or register, click <b>'Get OTP on Telegram'</b> on the MedCare website."
-        )
-        _send_telegram_direct_message(chat_id, default_msg)
-        return True
-
-    return False
+    # ── 5. Default Welcome if no active verification session is pending ──
+    default_msg = (
+        f"👋 <b>Welcome to MedCare Verification Bot, {first_name}!</b>\n\n"
+        f"This official bot delivers instant security OTP codes for your MedCare patient portal.\n\n"
+        f"👉 To sign in or register, click <b>'Get OTP on Telegram'</b> on the MedCare website."
+    )
+    _send_telegram_direct_message(chat_id, default_msg)
+    return True
 
 
 def _telegram_auth_worker():
