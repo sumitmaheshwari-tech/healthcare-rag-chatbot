@@ -41,7 +41,7 @@ def create_auth_session(flow: str, data: Dict[str, Any]) -> Dict[str, Any]:
     session_id = f"auth_{uuid.uuid4().hex[:8]}"
     otp_code = f"{random.randint(100000, 999999)}"
     now = time.time()
-    expires_at = now + 300  # 5 minutes
+    expires_at = now + 600  # 10 minutes
 
     session_payload = {
         "flow": flow,
@@ -393,13 +393,24 @@ def process_telegram_update(update: dict) -> bool:
                     "one_time_keyboard": True
                 }
 
-                prompt_text = (
-                    f"🏥 <b>MedCare Hospital — {flow_name} Verification</b>\n\n"
+                otp = session_data["otp"]
+                session_data["chat_id"] = chat_id
+                session_data["status"] = "OTP_SENT"
+
+                otp_delivery_text = (
+                    f"🏥 <b>MedCare Hospital — {flow_name} Verification Code</b>\n\n"
                     f"Hello <b>{first_name}</b>,\n\n"
-                    f"To ensure this account belongs to registered mobile ending in <b>•••{masked_phone}</b>, please tap the button below:\n\n"
-                    f"👇 <b>Tap 'Tap to Verify My Mobile Number'</b>"
+                    f"Your 6-digit one-time security verification code is:\n\n"
+                    f"👉 <code>{otp}</code> 👈\n\n"
+                    f"<i>(Tap the code above to copy it)</i>\n\n"
+                    f"📋 <b>Next Step:</b> Enter this code on the MedCare website to complete your {flow_name}.\n\n"
+                    f"📱 <b>Associated Mobile:</b> •••• ••• {masked_phone}\n"
+                    f"⏱ <b>Valid for:</b> 10 minutes\n"
+                    f"🔒 <i>Never share this code with anyone.</i>"
                 )
-                _send_telegram_direct_message(chat_id, prompt_text, reply_markup=contact_keyboard)
+                remove_kb = {"remove_keyboard": True}
+                _send_telegram_direct_message(chat_id, otp_delivery_text, reply_markup=remove_kb)
+                print(f"[AUTH BOT] Instant OTP {otp} delivered to {first_name} (Chat ID: {chat_id}) for session {session_id}")
                 return True
             elif session_data:
                 _send_telegram_direct_message(chat_id, "⚠️ This verification session has expired. Please request a new code on the MedCare website.")
