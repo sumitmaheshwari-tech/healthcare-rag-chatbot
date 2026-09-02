@@ -536,17 +536,28 @@ def find_patient_in_db(db, patient_uid_or_phone: str, phone_str: str = ""):
     cleaned_uid = (patient_uid_or_phone or "").strip().lower()
     target_phone = normalize_phone_number(phone_str or patient_uid_or_phone or "")
 
-    # 1. Match by Patient ID (case-insensitive)
-    if cleaned_uid:
+    # 1. Match by Patient ID (case-insensitive, handles 'pat-xxx' and 'xxx')
+    if cleaned_uid and not cleaned_uid.isdigit():
         for p in all_patients:
-            if p.id.strip().lower() == cleaned_uid:
+            p_id = p.id.strip().lower()
+            if p_id == cleaned_uid or p_id.replace("pat-", "") == cleaned_uid.replace("pat-", ""):
                 return p
 
-    # 2. Match by Phone Number
+    # 2. Match by Phone Number (checks decrypted phone AND raw stored phone)
     if target_phone:
         for p in all_patients:
-            p_phone = normalize_phone_number(decrypt_value(p.phone) if p.phone else "")
-            if p_phone and p_phone == target_phone:
+            raw_phone = normalize_phone_number(p.phone or "")
+            dec_phone = normalize_phone_number(decrypt_value(p.phone) if p.phone else "")
+            if (dec_phone and dec_phone == target_phone) or (raw_phone and raw_phone == target_phone):
+                return p
+
+    # 3. Fallback: If cleaned_uid was numeric phone digits
+    if cleaned_uid and cleaned_uid.isdigit() and len(cleaned_uid) >= 10:
+        digits = cleaned_uid[-10:]
+        for p in all_patients:
+            raw_phone = normalize_phone_number(p.phone or "")
+            dec_phone = normalize_phone_number(decrypt_value(p.phone) if p.phone else "")
+            if (dec_phone and dec_phone == digits) or (raw_phone and raw_phone == digits):
                 return p
 
     return None
@@ -702,13 +713,13 @@ async def initiate_telegram_auth(req: TelegramAuthInitiateRequest, req_raw: Requ
 
         if req.flow == "login":
             # Check if any patient exists with this phone or UID
-            patient = find_patient_in_db(db, req.patient_uid, req.phone)
+            patient = find_patient_in_db(db, req.patient_uid, target_phone)
             if not patient:
-                # Also search any patient by phone
                 all_patients = db.query(Patient).all()
                 for p in all_patients:
+                    raw_phone = normalize_phone_number(p.phone or "")
                     p_phone = normalize_phone_number(decrypt_value(p.phone) if p.phone else "")
-                    if p_phone == target_phone:
+                    if (p_phone and p_phone == target_phone) or (raw_phone and raw_phone == target_phone):
                         patient = p
                         break
             
@@ -837,9 +848,11 @@ async def verify_telegram_auth(req: TelegramAuthVerifyRequest, req_raw: Request,
             
             # Find all profiles belonging to this phone number
             for p in all_patients:
+                raw_phone = normalize_phone_number(p.phone or "")
                 ep_phone = normalize_phone_number(decrypt_value(p.phone) if p.phone else "")
-                if ep_phone == verified_phone:
-                    matching_patients.append(p)
+                if (ep_phone and ep_phone == verified_phone) or (raw_phone and raw_phone == verified_phone):
+                    if p not in matching_patients:
+                        matching_patients.append(p)
                 elif p_data.get("patient_uid") and p.id.lower() == p_data["patient_uid"].lower():
                     if p not in matching_patients:
                         matching_patients.append(p)
