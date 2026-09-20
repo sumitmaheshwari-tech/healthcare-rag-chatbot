@@ -252,7 +252,33 @@ async def agent_node(state, config, primary_llm, tools):
                 pass  # Non-critical — RAG tool will compute it if pre-warm fails
         threading.Thread(target=_prewarm_embedding, daemon=True).start()
 
-    full_system_prompt = SYSTEM_PROMPT + auth_ctx + intent_directive
+    # ── Live Real-Time Calendar Context Injection ─────────────────────
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo("Asia/Kolkata")
+        now_dt = datetime.now(tz)
+    except Exception:
+        from datetime import datetime
+        now_dt = datetime.now()
+
+    live_date_str = now_dt.strftime("%A, %B %d, %Y")
+    live_iso_date = now_dt.strftime("%Y-%m-%d")
+    live_time_str = now_dt.strftime("%I:%M %p")
+    live_day_name = now_dt.strftime("%A")
+
+    calendar_ctx = (
+        f"\n\n=== LIVE REAL-TIME CALENDAR CONTEXT ===\n"
+        f"• Today's Date: {live_date_str} (ISO: {live_iso_date})\n"
+        f"• Current Hospital Time: {live_time_str} (IST, Asia/Kolkata)\n"
+        f"• Day of Week: {live_day_name}\n"
+        f"• CALENDAR REFERENCE RULES:\n"
+        f"  1. ALWAYS calculate relative dates ('today', 'tomorrow', 'this Friday', 'next Monday') strictly starting from today's date ({live_iso_date}).\n"
+        f"  2. NEVER book or check availability for dates in the past.\n"
+        f"  3. When invoking appointment tools (check_doctor_availability, book_appointment), pass the date in YYYY-MM-DD format (e.g. date='{live_iso_date}')."
+    )
+
+    full_system_prompt = SYSTEM_PROMPT + calendar_ctx + auth_ctx + intent_directive
 
     # Ensure system prompt is always the first message in the payload
     trimmed_messages = [SystemMessage(content=full_system_prompt)] + trimmed_messages

@@ -51,6 +51,57 @@ def _normalize_time(raw_time: str) -> str:
     return t
 
 
+def _get_current_date() -> date:
+    """Get current calendar date in Indian Standard Time (Asia/Kolkata)."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    except Exception:
+        return datetime.now().date()
+
+
+def _normalize_date(raw_date: str):
+    """Normalize date strings from various formats or relative natural language to a date object.
+    
+    Handles:
+    - Relative words: 'today', 'tomorrow', 'tmrw', 'day after tomorrow'
+    - Weekdays: 'monday', 'next monday', 'tuesday', 'next friday', etc.
+    - Standard formats: 'YYYY-MM-DD', 'DD-MM-YYYY', 'DD/MM/YYYY', 'YYYY/MM/DD'
+    """
+    if not raw_date:
+        return None
+    d_str = str(raw_date).strip().lower()
+    today = _get_current_date()
+
+    if d_str in ("today", "now"):
+        return today
+    if d_str in ("tomorrow", "tmrw"):
+        return today + timedelta(days=1)
+    if d_str in ("day after tomorrow", "day after tmrw"):
+        return today + timedelta(days=2)
+
+    # Weekday resolver (e.g. 'monday', 'next monday', 'this friday')
+    weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    for idx, day_name in enumerate(weekdays):
+        if day_name in d_str:
+            days_ahead = idx - today.weekday()
+            if "next" in d_str:
+                days_ahead += 7
+            elif days_ahead <= 0:
+                days_ahead += 7
+            return today + timedelta(days=days_ahead)
+
+    # Standard numeric date formats
+    clean = d_str.replace("/", "-")
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%m-%d-%Y"):
+        try:
+            return datetime.strptime(clean, fmt).date()
+        except ValueError:
+            pass
+
+    return None
+
+
 def _generate_slots(start: str, end: str, duration: int) -> list[str]:
     """Generate time-slot strings between *start* and *end* at *duration*-min intervals."""
     fmt = "%H:%M"
@@ -69,14 +120,15 @@ def check_doctor_availability(doctor_name: str, date: str = "", date_str: str = 
 
     Args:
         doctor_name: Full or partial name of the doctor (e.g. 'Dr. Ananya Reddy') or department ('Cardiology').
-        date: The date to check in YYYY-MM-DD format (e.g. '2026-09-05').
-        date_str: The date to check in YYYY-MM-DD format (e.g. '2026-09-05').
+        date: The date to check in YYYY-MM-DD format (e.g. '2026-09-21' or 'tomorrow').
+        date_str: The date to check in YYYY-MM-DD format (e.g. '2026-09-21' or 'tomorrow').
     """
     db = get_db()
     try:
         target_date_raw = date or date_str
         if not target_date_raw:
-            return "Please provide a date in YYYY-MM-DD format (e.g. 2026-09-05)."
+            today = _get_current_date()
+            return f"Please provide a date in YYYY-MM-DD format (e.g. {today.strftime('%Y-%m-%d')}) or 'tomorrow'."
 
         # Find doctor by Name OR Department
         doctor = db.query(Doctor).filter(Doctor.name.ilike(f"%{doctor_name}%")).first()
@@ -93,13 +145,14 @@ def check_doctor_availability(doctor_name: str, date: str = "", date_str: str = 
         if not doctor:
             return f"Sorry, I could not find a doctor or department matching '{doctor_name}'. Please check the specialist name or department."
 
-        try:
-            target_date = datetime.strptime(target_date_raw, "%Y-%m-%d").date()
-        except ValueError:
-            return "Invalid date format. Please use YYYY-MM-DD (e.g. 2026-09-05)."
+        target_date = _normalize_date(target_date_raw)
+        if not target_date:
+            today = _get_current_date()
+            return f"Invalid date format. Please use YYYY-MM-DD (e.g. {today.strftime('%Y-%m-%d')}) or 'tomorrow'."
 
-        if target_date < datetime.now().date():
-            return "That date is in the past. Please choose today or a future date."
+        today = _get_current_date()
+        if target_date < today:
+            return f"That date ({target_date}) is in the past. Today is {today.strftime('%A, %B %d, %Y')}. Please choose today or a future date."
 
         holiday = db.query(DoctorHoliday).filter(DoctorHoliday.date == target_date).first()
         if holiday:
@@ -281,13 +334,14 @@ def book_appointment(
         if not doctor:
             return f"Doctor or department '{doctor_name}' not found. Please specify a doctor like Dr. Rajesh Mehta or a department like Cardiology."
 
-        try:
-            target_date = datetime.strptime(target_date_raw, "%Y-%m-%d").date()
-        except ValueError:
-            return "Invalid date format. Please use YYYY-MM-DD (e.g. 2026-09-05)."
+        target_date = _normalize_date(target_date_raw)
+        if not target_date:
+            today = _get_current_date()
+            return f"Invalid date format. Please use YYYY-MM-DD (e.g. {today.strftime('%Y-%m-%d')}) or 'tomorrow'."
 
-        if target_date < datetime.now().date():
-            return "Cannot book an appointment in the past. Please select today or a future date."
+        today = _get_current_date()
+        if target_date < today:
+            return f"Cannot book an appointment in the past. Today is {today.strftime('%A, %B %d, %Y')}. Please select today or a future date."
 
         holiday = db.query(DoctorHoliday).filter(DoctorHoliday.date == target_date).first()
         if holiday:
