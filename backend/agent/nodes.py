@@ -234,6 +234,15 @@ async def agent_node(state, config, primary_llm, tools):
             "Answer directly and comprehensively from your built-in knowledge. DO NOT call any tools — "
             "especially DO NOT call search_hospital_knowledge. List the departments and their doctors clearly."
         )
+    elif classified_intent == "OUT_OF_DOMAIN":
+        intent_directive = (
+            "\n\nCRITICAL OUT-OF-SCOPE GUARDRAIL DIRECTIVE:\n"
+            "The user is asking an off-topic question (such as computer programming, coding, software development, math, or non-healthcare trivia).\n"
+            "You MUST NOT answer their off-topic query. You MUST NOT generate any code or technical explanations. You MUST NOT call any tools.\n"
+            "Politely decline and redirect them back to MedCare healthcare services:\n"
+            "\"I am MedCare Hospital's clinical assistant. I am specifically designed to assist with healthcare inquiries, hospital services, doctor consultations, appointments, and medical department guidance. I cannot assist with programming, software code, or non-healthcare topics.\n\n"
+            "How may I assist you with your health or hospital services today?\""
+        )
 
     # ── Proactive embedding pre-warm (reduces RAG latency) ────────────
     if classified_intent == "GENERAL_KNOWLEDGE" and messages:

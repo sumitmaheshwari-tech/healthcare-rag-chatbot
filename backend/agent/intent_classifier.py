@@ -97,6 +97,27 @@ _HOSPITAL_INFO_PATTERN = re.compile(
 )
 
 
+_OUT_OF_DOMAIN_PATTERN = re.compile(
+    r"("
+    # Coding / programming requests
+    r"\b(write|create|generate|give\s*me|produce|show\s*me|make)\s*(a\s*)?(code|script|program|function|class|algorithm|regex|app)\b"
+    r"|\b(debug|fix|explain)\s*(this|my)?\s*code\b"
+    r"|\b(code|script)\s*(in|for|to)\b"
+    r"|\b(coding|programming|software\s*development|web\s*development)\b"
+    # Programming languages & tech tools
+    r"|\bwhat\s*is\s*(java|python|c\+\+|c#|javascript|typescript|golang|rust|ruby|php|html|css|sql|react|angular|vue|nodejs|spring\s*boot|django|flask|docker|kubernetes)\b"
+    r"|\b(explain|teach\s*me|how\s*to\s*use)\s*(java|python|c\+\+|javascript|typescript|html|css|sql|programming|git)\b"
+    r"|\b(java|python|c\+\+|c#|javascript|typescript|golang|rust|ruby|php|html|css|sql)\s*(code|program|script|syntax|tutorial|function|class|developer)\b"
+    # General non-medical academic / homework / trivia
+    r"|\b(solve|calculate)\s*(this\s*)?(math|equation|integral|derivative|algebra)\b"
+    r"|\bwrite\s*(an?\s*)?(essay|poem|song|story|lyrics)\b"
+    r"|\bwho\s*won\s*the\s*(world\s*cup|match|election|war)\b"
+    r"|\bcapital\s*of\s*[a-z\s]+"
+    r")",
+    re.IGNORECASE,
+)
+
+
 def classify_intent(query: str) -> Dict[str, object]:
     """Classify the user query intent using pre-compiled regex patterns.
 
@@ -112,7 +133,11 @@ def classify_intent(query: str) -> Dict[str, object]:
     if not text:
         return {"intent": "CHITCHAT", "confidence": 0.90}
 
-    # Order matters: check most specific patterns first
+    # Guardrail check first: reject out-of-scope / coding requests immediately
+    if _OUT_OF_DOMAIN_PATTERN.search(text):
+        return {"intent": "OUT_OF_DOMAIN", "confidence": 0.99}
+
+    # Order matters: check most specific patterns next
     if _DIRECT_ACTION_PATTERN.search(text):
         return {"intent": "DIRECT_ACTION", "confidence": 0.95}
 
