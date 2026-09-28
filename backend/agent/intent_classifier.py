@@ -113,6 +113,9 @@ _OUT_OF_DOMAIN_PATTERN = re.compile(
     r"|\bwrite\s*(an?\s*)?(essay|poem|song|story|lyrics)\b"
     r"|\bwho\s*won\s*the\s*(world\s*cup|match|election|war)\b"
     r"|\bcapital\s*of\s*[a-z\s]+"
+    # Jailbreaks, prompt injections, and persona overrides
+    r"|\b(ignore\s*(all\s*)?(previous|prior|above)\s*instructions|pretend\s*(you\s*are|to\s*be)|act\s*as\s*(a\s*)?(developer|hacker|unrestricted)|jailbreak|dan\s*mode|developer\s*mode|system\s*prompt|reveal\s*(your\s*)?instructions)\b"
+    r"|\b(forget\s*your\s*rules|disregard\s*(all\s*)?instructions|bypass\s*safety)\b"
     r")",
     re.IGNORECASE,
 )
