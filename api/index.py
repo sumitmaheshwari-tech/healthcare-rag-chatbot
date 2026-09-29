@@ -23,13 +23,25 @@ if str(ROOT_DIR) not in sys.path:
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-# Ensure SQLite and ChromaDB paths use /tmp if on serverless read-only filesystem
+# Ensure Supabase and ChromaDB paths use persistent DB / /tmp on serverless
 if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
     os.environ["VERCEL"] = "1"
+    os.environ.setdefault("ENV", "production")
+    
+    # Ensure persistent Supabase PostgreSQL connection by default
+    SUPABASE_POOLER_URL = "postgresql://postgres.xndvylywqqomrqpknvbo:Sumit%401974@aws-0-ap-south-1.pooler.supabase.com:6543/postgres?sslmode=require"
     db_url = os.environ.get("DATABASE_URL", "")
     if not db_url or ("sqlite" in db_url and "/tmp" not in db_url):
-        os.environ["DATABASE_URL"] = "sqlite:////tmp/hospital.db"
+        os.environ["DATABASE_URL"] = SUPABASE_POOLER_URL
     
+    # Fallback secrets if not populated in Vercel Dashboard
+    os.environ.setdefault("JWT_SECRET", "medcare-production-jwt-secret-2026")
+    os.environ.setdefault("GOOGLE_API_KEY", "AQ.Ab8RN6IIyFKeK8vK9Xh2M7y84iQ0-xZ9")
+    os.environ.setdefault("LLM_PROVIDER", "gemini")
+    os.environ.setdefault("LLM_MODEL", "gemini-3.5-flash-lite")
+    os.environ.setdefault("TELEGRAM_AUTH_BOT_TOKEN", "8630224222:AAFqjxhqGmkuEbZeoeRLrh7M4A30fDD-4uc")
+    os.environ.setdefault("TELEGRAM_AUTH_BOT_USERNAME", "MedCare_Verify_Auth_bot")
+
     chroma_dir = os.environ.get("CHROMA_PERSIST_DIR", "")
     if not chroma_dir or "/tmp" not in chroma_dir:
         os.environ["CHROMA_PERSIST_DIR"] = "/tmp/chroma_db"

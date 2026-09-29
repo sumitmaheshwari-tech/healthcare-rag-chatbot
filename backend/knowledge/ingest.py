@@ -274,20 +274,26 @@ def ingest_documents() -> Chroma | None:
     chunks = text_splitter.split_documents(documents)
     print(f"[RAG] Split into {len(chunks)} chunks.")
 
-    # Embed & store using Google Gemini embeddings
-    vectorstore = Chroma.from_documents(
-        documents=chunks,
-        embedding=embeddings,
-        persist_directory=str(persist_dir),
-        collection_name=settings.CHROMA_COLLECTION,
-    )
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
-    
-    # Initialize BM25 corpus from chunks
+    # Initialize BM25 corpus from chunks (pure in-memory, infallible fallback)
     corpus = [{"text": chunk.page_content, "metadata": chunk.metadata} for chunk in chunks]
     bm25_retriever = SimpleBM25(corpus)
-    
-    print(f"[RAG] Vector store and BM25 index created successfully with {len(chunks)} chunks.")
+    print(f"[RAG] In-memory BM25 index created successfully with {len(chunks)} chunks.")
+
+    # Embed & store using embeddings (ChromaDB)
+    try:
+        vectorstore = Chroma.from_documents(
+            documents=chunks,
+            embedding=embeddings,
+            persist_directory=str(persist_dir),
+            collection_name=settings.CHROMA_COLLECTION,
+        )
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+        print(f"[RAG] ChromaDB vector store created successfully with {len(chunks)} chunks.")
+    except Exception as e:
+        print(f"[RAG WARNING] ChromaDB vectorstore creation failed: {e}. Falling back to BM25-only lexical retriever.")
+        vectorstore = None
+        retriever = None
+
     return vectorstore
 
 

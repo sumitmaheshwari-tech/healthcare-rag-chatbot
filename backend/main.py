@@ -4,6 +4,7 @@ import os
 import sys
 import uuid
 import time
+import asyncio
 import jwt
 import json
 from typing import Optional, Dict, Any, List
@@ -49,6 +50,31 @@ JWT_ALGORITHM = "HS256"
 agent_graph = None
 
 
+# ── Helper for Lazy Agent Graph Compilation (Serverless-Safe) ────────
+_agent_build_lock = None
+
+def get_agent_build_lock():
+    global _agent_build_lock
+    if _agent_build_lock is None:
+        _agent_build_lock = asyncio.Lock()
+    return _agent_build_lock
+
+async def get_or_build_agent_graph():
+    global agent_graph
+    if agent_graph is not None:
+        return agent_graph
+    async with get_agent_build_lock():
+        if agent_graph is None:
+            print("[SERVERLESS] Compiling LangGraph agent graph on demand...")
+            try:
+                ingest_documents()
+            except Exception as e:
+                print(f"[RAG WARNING] Knowledge base ingest warning: {e}")
+            agent_graph = await build_graph()
+            print("[SERVERLESS] Agent graph ready.")
+    return agent_graph
+
+
 # ── Lifespan (startup / shutdown) ─────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -60,21 +86,35 @@ async def lifespan(app: FastAPI):
 
     # 1. Database (Persistent Storage for All Patients & Appointments)
     print("\n[1/3] Initialising database …")
-    init_db()
-    db = get_db()
-    seed_database(db)
-    db.close()
-    print("[1/3] Database tables ensured & patient data preserved.\n")
+    try:
+        init_db()
+        db = get_db()
+        seed_database(db)
+        db.close()
+        print("[1/3] Database tables ensured & patient data preserved.\n")
+    except Exception as e:
+        print(f"[DB WARNING] Database setup warning: {e}\n")
 
-    # 2. Knowledge base
-    print("[2/3] Ingesting knowledge base …")
-    ingest_documents()
-    print("[2/3] Knowledge base ready.\n")
+    is_serverless = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+    if is_serverless:
+        print("[SERVERLESS] Vercel Serverless environment detected.")
+        print("[SERVERLESS] Deferring knowledge base and agent graph to lazy-load on first chat query.\n")
+    else:
+        # 2. Knowledge base
+        print("[2/3] Ingesting knowledge base …")
+        try:
+            ingest_documents()
+            print("[2/3] Knowledge base ready.\n")
+        except Exception as e:
+            print(f"[RAG WARNING] Knowledge base error: {e}\n")
 
-    # 3. LangGraph agent
-    print("[3/3] Building LangGraph agent …")
-    agent_graph = await build_graph()
-    print("[3/3] Agent ready.\n")
+        # 3. LangGraph agent
+        print("[3/3] Building LangGraph agent …")
+        try:
+            agent_graph = await build_graph()
+            print("[3/3] Agent ready.\n")
+        except Exception as e:
+            print(f"[AGENT ERROR] Agent build error: {e}\n")
 
     print("=" * 60)
     print("  MedCare RAG Chatbot — Ready!")
@@ -249,7 +289,8 @@ async def chat(request: ChatRequest, req_raw: Request, response: Response):
 
     response.headers["Cache-Control"] = "no-store"
 
-    if agent_graph is None:
+    active_graph = await get_or_build_agent_graph()
+    if active_graph is None:
         raise HTTPException(status_code=503, detail="Agent not initialised yet.")
 
     if not request.message.strip():
@@ -305,7 +346,7 @@ async def chat(request: ChatRequest, req_raw: Request, response: Response):
                 nonlocal run_text_buffer, current_run_id, tool_runs_completed, t_first_token
                 sse_events = []
 
-                async for event in agent_graph.astream_events(
+                async for event in active_graph.astream_events(
                     {
                         "messages": [HumanMessage(content=user_message)],
                         "authenticated_patient_uid": auth_uid
@@ -390,7 +431,7 @@ async def chat(request: ChatRequest, req_raw: Request, response: Response):
                 yield f"data: {json.dumps({'type': 'content', 'text': 'I apologize, I was unable to generate a response. Please try rephrasing your question.'})}\n\n"
 
             # ── Verify if login/registration succeeded ────────────────
-            state = await agent_graph.aget_state(config)
+            state = await active_graph.aget_state(config)
             verified_patient_id = ""
             verified_patient_name = ""
             import re
@@ -1092,9 +1133,10 @@ async def get_current_patient_profile(request: Request, response: Response):
 @app.get("/api/health")
 async def health_check():
     """System health endpoint reporting status of Database, Redis, and LLM configurations."""
+    is_serverless = bool(os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"))
     health_status = {
         "status": "healthy",
-        "agent_ready": agent_graph is not None,
+        "agent_ready": (agent_graph is not None) or is_serverless,
         "database": "unhealthy",
         "redis": "unhealthy",
         "primary_llm": "unknown"

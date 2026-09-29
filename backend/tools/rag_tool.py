@@ -85,8 +85,19 @@ def search_hospital_knowledge(
     vectorstore = get_vectorstore()
     bm25 = get_bm25_retriever()
 
-    if vectorstore is None or bm25 is None:
+    if vectorstore is None and bm25 is None:
         return "Knowledge base is not available. Please try again later."
+
+    # If vectorstore is unavailable (e.g., serverless cold start or SQLite constraint), use BM25
+    if vectorstore is None:
+        print(f"[RAG] Vectorstore unavailable, falling back to BM25 lexical retrieval.")
+        bm25_docs = bm25.score(query, top_n=3)
+        if not bm25_docs:
+            return "No relevant information found in the hospital knowledge base."
+        results = [f"[Source: {d.get('metadata', {}).get('category', 'unknown')}] {d.get('text', '')}" for d in bm25_docs]
+        final_response = "\n\n".join(results)
+        retrieval_cache.set(cache_key, final_response)
+        return final_response
 
     # 3. Check / Populate Embedding Cache to skip expensive embedding computation
     query_vector = embedding_cache.get(cache_key)
@@ -100,8 +111,14 @@ def search_hospital_knowledge(
             print(f"[PERF] Embedding: {(t1-t0)*1000:.1f}ms")
             embedding_cache.set(cache_key, query_vector)
         except Exception as e:
-            print(f"[RAG ERROR] Failed to generate query embedding: {e}")
-            # Fallback search if embedding fails
+            print(f"[RAG ERROR] Failed to generate query embedding: {e}. Falling back to BM25.")
+            if bm25 is not None:
+                bm25_docs = bm25.score(query, top_n=3)
+                if bm25_docs:
+                    results = [f"[Source: {d.get('metadata', {}).get('category', 'unknown')}] {d.get('text', '')}" for d in bm25_docs]
+                    final_response = "\n\n".join(results)
+                    retrieval_cache.set(cache_key, final_response)
+                    return final_response
             return "Failed to query the knowledge base due to embedding generation error."
 
     # 4. Execute Semantic and Lexical Search concurrently (thread-safe)
