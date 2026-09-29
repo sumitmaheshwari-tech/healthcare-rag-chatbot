@@ -3,25 +3,29 @@
 Vercel Serverless Function entry point for MedCare FastAPI Backend.
 """
 
-# Override system SQLite with pysqlite3 for ChromaDB compatibility on AWS Lambda / Vercel
-try:
-    __import__("pysqlite3")
-    import sys
-    sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
-except ImportError:
-    pass
-
 import sys
 import os
 from pathlib import Path
 
+# Override system SQLite with pysqlite3 for ChromaDB compatibility on AWS Lambda / Vercel
+try:
+    import pysqlite3
+    sys.modules["sqlite3"] = pysqlite3
+except Exception:
+    pass
+
 ROOT_DIR = Path(__file__).resolve().parent.parent
 BACKEND_DIR = ROOT_DIR / "backend"
+API_DIR = Path(__file__).resolve().parent
 
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-if str(BACKEND_DIR) not in sys.path:
-    sys.path.insert(0, str(BACKEND_DIR))
+for p in [str(ROOT_DIR), str(BACKEND_DIR), str(API_DIR)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+# Also check if backend is inside or sibling of api directory
+sibling_backend = API_DIR / "backend"
+if sibling_backend.exists() and str(sibling_backend) not in sys.path:
+    sys.path.insert(0, str(sibling_backend))
 
 # Ensure Supabase and ChromaDB paths use persistent DB / /tmp on serverless
 if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
@@ -46,4 +50,25 @@ if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
     if not chroma_dir or "/tmp" not in chroma_dir:
         os.environ["CHROMA_PERSIST_DIR"] = "/tmp/chroma_db"
 
-from backend.main import app
+try:
+    from backend.main import app
+except Exception as e:
+    import traceback
+    startup_error = traceback.format_exc()
+    print(f"[FATAL VERCEL STARTUP ERROR]\n{startup_error}")
+    
+    from fastapi import FastAPI
+    from fastapi.responses import PlainTextResponse
+    app = FastAPI(title="MedCare Startup Diagnostic")
+    
+    @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+    async def diagnostic_error_handler(path: str):
+        parent_dir = str(API_DIR.parent)
+        return PlainTextResponse(
+            f"MEDCARE_STARTUP_EXCEPTION:\n{startup_error}\n\n"
+            f"sys.path: {sys.path}\n"
+            f"cwd: {os.getcwd()}\n"
+            f"api dir contents: {os.listdir(str(API_DIR)) if API_DIR.exists() else 'N/A'}\n"
+            f"root dir contents: {os.listdir(parent_dir) if os.path.exists(parent_dir) else 'N/A'}\n",
+            status_code=500
+        )
