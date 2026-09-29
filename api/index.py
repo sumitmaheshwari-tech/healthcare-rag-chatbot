@@ -34,14 +34,14 @@ if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
     os.environ.setdefault("ENV", "production")
     
     # Ensure persistent Supabase PostgreSQL connection by default
-    SUPABASE_POOLER_URL = "postgresql://postgres.xndvylywqqomrqpknvbo:Sumit%401974@aws-0-ap-south-1.pooler.supabase.com:6543/postgres?sslmode=require"
+    SUPABASE_POOLER_URL = "postgresql://postgres.wztqumimqknwgeqdvvfc:NTOcGyC5IpSvxqRN@aws-0-ap-south-1.pooler.supabase.com:6543/postgres?sslmode=require"
     db_url = os.environ.get("DATABASE_URL", "")
     if not db_url or ("sqlite" in db_url and "/tmp" not in db_url):
         os.environ["DATABASE_URL"] = SUPABASE_POOLER_URL
     
     # Fallback secrets if not populated in Vercel Dashboard
     os.environ.setdefault("JWT_SECRET", "medcare-production-jwt-secret-2026")
-    os.environ.setdefault("GOOGLE_API_KEY", "AQ.Ab8RN6IIyFKeK8vK9Xh2M7y84iQ0-xZ9")
+    os.environ.setdefault("GOOGLE_API_KEY", "AQ.Ab8RN6IIyFKeRnXQGSCxZY49wknN0DpOXqtfDzzTMDJqexHqHg")
     os.environ.setdefault("LLM_PROVIDER", "gemini")
     os.environ.setdefault("LLM_MODEL", "gemini-3.5-flash-lite")
     os.environ.setdefault("TELEGRAM_AUTH_BOT_TOKEN", "8630224222:AAFqjxhqGmkuEbZeoeRLrh7M4A30fDD-4uc")
