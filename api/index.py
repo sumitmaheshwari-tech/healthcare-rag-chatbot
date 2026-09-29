@@ -7,12 +7,6 @@ import sys
 import os
 from pathlib import Path
 
-# Override system SQLite with pysqlite3 for ChromaDB compatibility on AWS Lambda / Vercel
-try:
-    import pysqlite3
-    sys.modules["sqlite3"] = pysqlite3
-except Exception:
-    pass
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 BACKEND_DIR = ROOT_DIR / "backend"

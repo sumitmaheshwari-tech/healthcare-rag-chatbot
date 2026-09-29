@@ -1,16 +1,14 @@
 {
   "version": 2,
+  "functions": {
+    "api/index.py": {
+      "includeFiles": "backend/**",
+      "maxDuration": 60
+    }
+  },
   "builds": [
     {
       "src": "api/index.py",
-      "use": "@vercel/python",
-      "config": {
-        "maxDuration": 60,
-        "includeFiles": "backend/**"
-      }
-    },
-    {
-      "src": "api/test.py",
       "use": "@vercel/python"
     },
     {
@@ -19,10 +17,6 @@
     }
   ],
   "routes": [
-    {
-      "src": "/api/test",
-      "dest": "api/test.py"
-    },
     {
       "src": "/api/(.*)",
       "dest": "api/index.py"
