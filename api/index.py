@@ -7,19 +7,26 @@ import sys
 import os
 from pathlib import Path
 
-
-ROOT_DIR = Path(__file__).resolve().parent.parent
-BACKEND_DIR = ROOT_DIR / "backend"
-API_DIR = Path(__file__).resolve().parent
-
-for p in [str(ROOT_DIR), str(BACKEND_DIR), str(API_DIR)]:
-    if p not in sys.path:
-        sys.path.insert(0, p)
-
-# Also check if backend is inside or sibling of api directory
-sibling_backend = API_DIR / "backend"
-if sibling_backend.exists() and str(sibling_backend) not in sys.path:
-    sys.path.insert(0, str(sibling_backend))
+# Add all candidate paths to sys.path so 'backend' is always importable
+current_dir = Path(__file__).resolve().parent
+parent_dir = current_dir.parent
+candidates = [
+    current_dir,
+    parent_dir,
+    current_dir / "backend",
+    parent_dir / "backend",
+    Path("/var/task"),
+    Path("/var/task/backend"),
+    Path(os.getcwd()),
+    Path(os.getcwd()) / "backend",
+]
+for c in candidates:
+    try:
+        s = str(c)
+        if s not in sys.path and c.exists():
+            sys.path.insert(0, s)
+    except Exception:
+        pass
 
 # Ensure Supabase and ChromaDB paths use persistent DB / /tmp on serverless
 if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
@@ -52,17 +59,19 @@ except Exception as e:
     print(f"[FATAL VERCEL STARTUP ERROR]\n{startup_error}")
     
     from fastapi import FastAPI
-    from fastapi.responses import PlainTextResponse
-    app = FastAPI(title="MedCare Startup Diagnostic")
+    from fastapi.responses import JSONResponse
+    app = FastAPI(title="MedCare Diagnostic")
     
     @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
     async def diagnostic_error_handler(path: str):
-        parent_dir = str(API_DIR.parent)
-        return PlainTextResponse(
-            f"MEDCARE_STARTUP_EXCEPTION:\n{startup_error}\n\n"
-            f"sys.path: {sys.path}\n"
-            f"cwd: {os.getcwd()}\n"
-            f"api dir contents: {os.listdir(str(API_DIR)) if API_DIR.exists() else 'N/A'}\n"
-            f"root dir contents: {os.listdir(parent_dir) if os.path.exists(parent_dir) else 'N/A'}\n",
-            status_code=500
+        return JSONResponse(
+            {
+                "status": "startup_error",
+                "exception": str(e),
+                "traceback": startup_error,
+                "sys_path": sys.path,
+                "cwd": os.getcwd(),
+                "dir_contents": os.listdir(".") if os.path.exists(".") else [],
+            },
+            status_code=200  # Return 200 so Vercel edge proxy does not mask the diagnostic output
         )

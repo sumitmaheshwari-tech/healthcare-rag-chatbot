@@ -51,6 +51,10 @@ class RedisCache:
         self.fallback = TTLCache(ttl_seconds=ttl_seconds)
         self.client = None
 
+        if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+            # Serverless functions are stateless with no local Redis daemon; use in-memory TTLCache directly
+            return
+
         # Map localhost explicitly to IPv4 loopback to avoid Windows IPv6 dual-stack DNS check delays
         resolved_host = "127.0.0.1" if host == "localhost" else host
 
