@@ -22,6 +22,7 @@ let loginCredentialsGroup, loginOtpGroup, loginOtpInput, loginTelegramLink, logi
 
 let registerNameInput, registerDobInput, registerPhoneInput, registerErrorBox, registerSubmitBtn;
 let registerCredentialsGroup, registerOtpGroup, registerOtpInput, registerTelegramLink, registerBackBtn;
+let registerDirectBtn, registerSkipOtpBtn, loginSkipToRegisterBtn;
 
 let switchToRegisterLink, switchToLoginLink;
 let profileSelectCard, profileListContainer, addFamilyMemberBtn, switchBackToLogin;
@@ -72,7 +73,10 @@ document.addEventListener('DOMContentLoaded', () => {
     registerOtpGroup    = document.getElementById('register-otp-group');
     registerOtpInput    = document.getElementById('register-otp');
     registerTelegramLink = document.getElementById('register-telegram-link');
-        registerBackBtn     = document.getElementById('register-back-btn');
+    registerBackBtn     = document.getElementById('register-back-btn');
+    registerDirectBtn   = document.getElementById('register-direct-btn');
+    registerSkipOtpBtn  = document.getElementById('register-skip-otp-btn');
+    loginSkipToRegisterBtn = document.getElementById('login-skip-to-register-btn');
     profileSelectCard   = document.getElementById('profile-select-card');
     profileListContainer = document.getElementById('profile-list-container');
     addFamilyMemberBtn  = document.getElementById('add-family-member-btn');
@@ -624,7 +628,32 @@ function setupAuthFormListeners() {
                 loginSubmitBtn.disabled = false;
                 loginSubmitBtn.textContent = 'Verify Code & Sign In';
             } catch (err) {
-                loginErrorBox.textContent = err.message;
+                const phoneVal = phone || loginPhoneInput.value.trim();
+                const isNotFound = err.message && (
+                    err.message.toLowerCase().includes('not found') ||
+                    err.message.toLowerCase().includes('no patient') ||
+                    err.message.toLowerCase().includes('no account') ||
+                    err.message.toLowerCase().includes('register')
+                );
+
+                if (isNotFound && phoneVal) {
+                    loginErrorBox.innerHTML = `
+                        <div style="margin-bottom:8px;">${escapeHtml(err.message)}</div>
+                        <button type="button" id="login-auto-switch-reg-btn" class="auth-btn" style="background:#16a34a;padding:8px 12px;font-size:0.85rem;margin:4px auto 0 auto;display:block;">
+                            ⚡ Create Profile for ${escapeHtml(phoneVal)}
+                        </button>
+                    `;
+                    document.getElementById('login-auto-switch-reg-btn')?.addEventListener('click', () => {
+                        loginCard.classList.add('hidden');
+                        registerCard.classList.remove('hidden');
+                        loginErrorBox.classList.add('hidden');
+                        registerErrorBox.classList.add('hidden');
+                        registerPhoneInput.value = phoneVal;
+                        registerNameInput.focus();
+                    });
+                } else {
+                    loginErrorBox.textContent = err.message;
+                }
                 loginErrorBox.classList.remove('hidden');
                 loginSubmitBtn.disabled = false;
                 loginSubmitBtn.textContent = '📲 Get OTP on Telegram';
@@ -791,7 +820,103 @@ function setupAuthFormListeners() {
             registerOtpInput.required = false;
             registerSubmitBtn.disabled = false;
             registerSubmitBtn.textContent = '📲 Get OTP on Telegram';
-            registerErrorBox.classList.add('hidden');
+        });
+    }
+
+    // 5. Direct Instant Registration (No Telegram Required)
+    async function executeDirectRegistration(name, dob, phone) {
+        if (!name) {
+            registerErrorBox.textContent = "Please enter your full name.";
+            registerErrorBox.classList.remove('hidden');
+            registerNameInput.focus();
+            return;
+        }
+        const cleanPhone = (phone || '').replace(/\D/g, '');
+        if (!cleanPhone || cleanPhone.length < 10) {
+            registerErrorBox.textContent = "Please enter a valid 10-digit mobile number.";
+            registerErrorBox.classList.remove('hidden');
+            registerPhoneInput.focus();
+            return;
+        }
+
+        if (registerDirectBtn) {
+            registerDirectBtn.disabled = true;
+            registerDirectBtn.textContent = "⚡ Creating Profile...";
+        }
+        registerErrorBox.classList.add('hidden');
+
+        try {
+            const res = await fetch(`${API_BASE}/api/patients/register`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: name,
+                    dob: dob,
+                    phone: cleanPhone
+                })
+            });
+
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || 'Registration failed. Please check your details.');
+            }
+
+            const regData = await res.json();
+            loginPatient({
+                patient_uid: regData.patient_uid,
+                name: regData.name,
+                dob: regData.dob
+            });
+
+            const welcomeText = regData.already_registered
+                ? `🎉 **Welcome back to MedCare Hospital, ${regData.name}!**\n\nYou have been signed into your profile.\n🔑 **Your Patient ID is:** \`${regData.patient_uid}\`\n\n*(You can now book appointments, view bills, and check medical records anytime!)*`
+                : `🎉 **Welcome to MedCare Hospital, ${regData.name}!**\n\nYour profile has been created and verified.\n🔑 **Your Official Patient ID is:** \`${regData.patient_uid}\`\n\n*(You can now book appointments, view doctor availability, and check medical records anytime!)*`;
+
+            addMessage(welcomeText, 'bot');
+        } catch (err) {
+            registerErrorBox.textContent = err.message;
+            registerErrorBox.classList.remove('hidden');
+        } finally {
+            if (registerDirectBtn) {
+                registerDirectBtn.disabled = false;
+                registerDirectBtn.textContent = "⚡ Instant Register & Sign In";
+            }
+        }
+    }
+
+    if (registerDirectBtn) {
+        registerDirectBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            executeDirectRegistration(
+                registerNameInput.value.trim(),
+                registerDobInput.value.trim(),
+                registerPhoneInput.value.trim()
+            );
+        });
+    }
+
+    if (registerSkipOtpBtn) {
+        registerSkipOtpBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            executeDirectRegistration(
+                registerNameInput.value.trim(),
+                registerDobInput.value.trim(),
+                registerPhoneInput.value.trim()
+            );
+        });
+    }
+
+    if (loginSkipToRegisterBtn) {
+        loginSkipToRegisterBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            loginCard.classList.add('hidden');
+            registerCard.classList.remove('hidden');
+            loginOtpGroup.classList.add('hidden');
+            loginCredentialsGroup.classList.remove('hidden');
+            registerPhoneInput.value = loginPhoneInput.value.trim();
+            registerCredentialsGroup.classList.remove('hidden');
+            registerOtpGroup.classList.add('hidden');
+            registerNameInput.focus();
         });
     }
 }

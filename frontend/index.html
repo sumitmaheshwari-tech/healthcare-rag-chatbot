@@ -96,7 +96,7 @@
                             <div class="telegram-step-box">
                                 <strong><i class="fab fa-telegram" style="color: #0088cc;"></i> Step 1:</strong> Tap below to open our official bot and receive your security code directly in Telegram:
                             </div>
-                            <a id="login-telegram-link" href="https://t.me/MedCare_Verify_Auth_bot" target="_blank" class="telegram-open-btn">
+                            <a id="login-telegram-link" href="https://t.me/MedCare_Verify_Auth_bot" target="_blank" rel="noopener noreferrer" class="telegram-open-btn">
                                 <i class="fab fa-telegram-plane"></i> Tap to Open @MedCare_Verify_Auth_bot
                             </a>
                             <label for="login-otp" style="margin-top: 6px;">Enter 6-Digit Telegram Code</label>
@@ -109,6 +109,7 @@
                                     <i class="fas fa-arrow-left"></i> Change Details
                                 </a>
                             </div>
+                            <button type="button" id="login-skip-to-register-btn" class="auth-btn" style="background:#475569;margin-top:12px;font-size:0.85rem;padding:9px 12px;">⚡ Need an account? Register directly</button>
                         </div>
 
                         <div class="auth-error-box hidden" id="login-error"></div>
@@ -147,7 +148,7 @@
                             <div class="telegram-step-box">
                                 <strong><i class="fab fa-telegram" style="color: #0088cc;"></i> Step 1:</strong> Tap below to open our official bot and receive your security code directly in Telegram:
                             </div>
-                            <a id="register-telegram-link" href="https://t.me/MedCare_Verify_Auth_bot" target="_blank" class="telegram-open-btn">
+                            <a id="register-telegram-link" href="https://t.me/MedCare_Verify_Auth_bot" target="_blank" rel="noopener noreferrer" class="telegram-open-btn">
                                 <i class="fab fa-telegram-plane"></i> Tap to Open @MedCare_Verify_Auth_bot
                             </a>
                             <label for="register-otp" style="margin-top: 6px;">Enter 6-Digit Telegram Code</label>
@@ -160,10 +161,12 @@
                                     <i class="fas fa-arrow-left"></i> Change Details
                                 </a>
                             </div>
+                            <button type="button" id="register-skip-otp-btn" class="auth-btn" style="background:#475569;margin-top:12px;font-size:0.85rem;padding:9px 12px;">⚡ Don't have Telegram? Register directly</button>
                         </div>
 
                         <div class="auth-error-box hidden" id="register-error"></div>
-                        <button type="submit" id="register-submit-btn" class="auth-btn register-btn">📲 Get OTP on Telegram</button>
+                        <button type="button" id="register-direct-btn" class="auth-btn" style="background:#2563eb;margin-bottom:8px;">⚡ Instant Register & Sign In</button>
+                        <button type="submit" id="register-submit-btn" class="auth-btn register-btn" style="background:#0284c7;">📲 Or Verify via Telegram OTP</button>
                     </form>
                     <p class="auth-switch" id="register-switch-container">Already registered? <a href="#" id="switch-to-login">Sign In here</a></p>
                 </div>
@@ -235,6 +238,6 @@
     </div>
 
     <!-- Frontend logic client with Cache Buster -->
-    <script src="/static/script.js?v=3.1"></script>
+    <script src="/static/script.js?v=3.2"></script>
 </body>
 </html>

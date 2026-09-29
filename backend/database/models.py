@@ -1,7 +1,7 @@
 """SQLAlchemy database models for the healthcare chatbot (2026 Enterprise Edition)."""
 
 from sqlalchemy import (
-    Column, Integer, String, Float, DateTime, Date,
+    Column, Integer, BigInteger, String, Float, DateTime, Date,
     Boolean, Text, ForeignKey, Enum as SQLEnum,
 )
 from sqlalchemy.orm import declarative_base, relationship
@@ -356,7 +356,7 @@ class TelegramAuthSession(Base):
     flow = Column(String(20), nullable=False)  # "login" or "register"
     patient_data_json = Column(Text, nullable=False)  # JSON serialized data
     otp = Column(String(10), nullable=False)
-    chat_id = Column(Integer, nullable=True, index=True)
+    chat_id = Column(BigInteger, nullable=True, index=True)
     status = Column(String(50), default="AWAITING_TELEGRAM_START")
     expires_at = Column(Float, nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)

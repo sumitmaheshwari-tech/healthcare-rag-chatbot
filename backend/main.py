@@ -192,7 +192,7 @@ class ChatResponse(BaseModel):
 
 class RegisterRequest(BaseModel):
     name: str
-    dob: str  # YYYY-MM-DD
+    dob: Optional[str] = ""  # YYYY-MM-DD (Optional)
     phone: str
 
 
@@ -428,88 +428,6 @@ async def chat(request: ChatRequest, req_raw: Request, response: Response):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-@app.post("/api/patients/register")
-async def register_patient(req: RegisterRequest, req_raw: Request, response: Response):
-    """Register a new patient securely, generating a unique MRN and setting JWT session."""
-    response.headers["Cache-Control"] = "no-store"
-    req_id = str(uuid.uuid4())
-    db = get_db()
-    try:
-        # Duplicate check: load all patients matching the Name
-        existing_patients = db.query(Patient).filter(Patient.name.ilike(req.name.strip())).all()
-        for ep in existing_patients:
-            dec_phone = decrypt_value(ep.phone)
-            dec_dob = decrypt_value(ep.dob)
-            if dec_phone == req.phone.strip() and dec_dob == req.dob.strip():
-                log_audit_event(
-                    request_id=req_id,
-                    action="REGISTER",
-                    status="FAILED",
-                    ip_address=req_raw.client.host,
-                    user_agent=req_raw.headers.get("User-Agent"),
-                    details=f"Duplicate registration attempt. Existing patient ID: {ep.id}."
-                )
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Patient '{req.name}' is already registered with these details."
-                )
-
-        new_uid = f"pat-{uuid.uuid4().hex[:12]}"
-        
-        # Calculate age
-        age = 0
-        try:
-            dob_date = datetime.strptime(req.dob, "%Y-%m-%d")
-            age = (datetime.utcnow() - dob_date).days // 365
-        except Exception:
-            pass
-
-        new_pat = Patient(
-            id=new_uid,
-            name=req.name.strip(),
-            dob=encrypt_value(req.dob.strip()),
-            age=age,
-            gender="Unknown", # Collect rest in-app or chat
-            phone=encrypt_value(req.phone.strip()),
-            email=encrypt_value(""),
-            address=encrypt_value(""),
-            blood_group=encrypt_value(""),
-            emergency_contact=encrypt_value("")
-        )
-        db.add(new_pat)
-        db.commit()
-
-        # Log audit log
-        log_audit_event(
-            request_id=req_id,
-            action="REGISTER",
-            status="SUCCESS",
-            patient_uid=new_uid,
-            ip_address=req_raw.client.host,
-            user_agent=req_raw.headers.get("User-Agent"),
-            resource=f"patients/{new_uid}",
-            details=f"Registered patient '{req.name}'"
-        )
-
-        # Issue JWT cookies automatically on successful registration
-        access_token, refresh_token = create_tokens(new_uid)
-        set_jwt_cookies(response, access_token, refresh_token)
-
-        return {
-            "success": True,
-            "patient_uid": new_uid,
-            "name": new_pat.name,
-            "dob": req.dob
-        }
-    except Exception as e:
-        db.rollback()
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        db.close()
-
-
 def normalize_dob(dob_str: str) -> str:
     """Normalize various date formats (YYYY-MM-DD, DD-MM-YYYY, DD/MM/YYYY) to standard YYYY-MM-DD."""
     if not dob_str:
@@ -528,6 +446,105 @@ def normalize_phone_number(phone_str: str) -> str:
     """Extract clean 10-digit mobile number digits."""
     digits = "".join(c for c in phone_str if c.isdigit())
     return digits[-10:] if len(digits) >= 10 else digits
+
+
+@app.post("/api/patients/register")
+async def register_patient(req: RegisterRequest, req_raw: Request, response: Response):
+    """Register a new patient securely, generating a unique MRN and setting JWT session."""
+    response.headers["Cache-Control"] = "no-store"
+    req_id = str(uuid.uuid4())
+    db = get_db()
+    try:
+        clean_name = req.name.strip()
+        if not clean_name:
+            raise HTTPException(status_code=400, detail="Please enter your full name.")
+
+        target_phone = normalize_phone_number(req.phone)
+        if not target_phone or len(target_phone) < 10:
+            raise HTTPException(status_code=400, detail="Please enter a valid 10-digit mobile number.")
+
+        clean_dob = normalize_dob(req.dob)
+
+        # 1. Check if patient with this exact phone and name already exists
+        all_patients = db.query(Patient).all()
+        for ep in all_patients:
+            raw_phone = normalize_phone_number(ep.phone or "")
+            dec_phone = normalize_phone_number(decrypt_value(ep.phone) if ep.phone else "")
+            if (dec_phone == target_phone or raw_phone == target_phone) and ep.name.strip().lower() == clean_name.lower():
+                # Profile already exists — log in directly!
+                access_token, refresh_token = create_tokens(ep.id)
+                set_jwt_cookies(response, access_token, refresh_token)
+                log_audit_event(
+                    request_id=req_id,
+                    action="LOGIN_DIRECT",
+                    status="SUCCESS",
+                    patient_uid=ep.id,
+                    ip_address=req_raw.client.host,
+                    user_agent=req_raw.headers.get("User-Agent"),
+                    details=f"Patient {ep.name} logged into existing profile via direct registration form."
+                )
+                return {
+                    "success": True,
+                    "patient_uid": ep.id,
+                    "name": ep.name,
+                    "dob": clean_dob or (decrypt_value(ep.dob) if ep.dob else ""),
+                    "already_registered": True
+                }
+
+        # 2. Create new patient profile
+        new_uid = f"pat-{uuid.uuid4().hex[:12]}"
+        age = 0
+        if clean_dob:
+            try:
+                dob_date = datetime.strptime(clean_dob, "%Y-%m-%d")
+                age = (datetime.utcnow() - dob_date).days // 365
+            except Exception:
+                pass
+
+        new_pat = Patient(
+            id=new_uid,
+            name=clean_name,
+            dob=encrypt_value(clean_dob),
+            age=age,
+            gender="Unknown",
+            phone=encrypt_value(target_phone),
+            email=encrypt_value(""),
+            address=encrypt_value(""),
+            blood_group=encrypt_value(""),
+            emergency_contact=encrypt_value("")
+        )
+        db.add(new_pat)
+        db.commit()
+
+        # Log audit log
+        log_audit_event(
+            request_id=req_id,
+            action="REGISTER",
+            status="SUCCESS",
+            patient_uid=new_uid,
+            ip_address=req_raw.client.host,
+            user_agent=req_raw.headers.get("User-Agent"),
+            resource=f"patients/{new_uid}",
+            details=f"Registered patient '{clean_name}'"
+        )
+
+        # Issue JWT cookies automatically on successful registration
+        access_token, refresh_token = create_tokens(new_uid)
+        set_jwt_cookies(response, access_token, refresh_token)
+
+        return {
+            "success": True,
+            "patient_uid": new_uid,
+            "name": new_pat.name,
+            "dob": clean_dob
+        }
+    except Exception as e:
+        db.rollback()
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
 
 
 def find_patient_in_db(db, patient_uid_or_phone: str, phone_str: str = ""):
