@@ -491,101 +491,11 @@ def normalize_phone_number(phone_str: str) -> str:
 
 @app.post("/api/patients/register")
 async def register_patient(req: RegisterRequest, req_raw: Request, response: Response):
-    """Register a new patient securely, generating a unique MRN and setting JWT session."""
-    response.headers["Cache-Control"] = "no-store"
-    req_id = str(uuid.uuid4())
-    db = get_db()
-    try:
-        clean_name = req.name.strip()
-        if not clean_name:
-            raise HTTPException(status_code=400, detail="Please enter your full name.")
-
-        target_phone = normalize_phone_number(req.phone)
-        if not target_phone or len(target_phone) < 10:
-            raise HTTPException(status_code=400, detail="Please enter a valid 10-digit mobile number.")
-
-        clean_dob = normalize_dob(req.dob)
-
-        # 1. Check if patient with this exact phone and name already exists
-        all_patients = db.query(Patient).all()
-        for ep in all_patients:
-            raw_phone = normalize_phone_number(ep.phone or "")
-            dec_phone = normalize_phone_number(decrypt_value(ep.phone) if ep.phone else "")
-            if (dec_phone == target_phone or raw_phone == target_phone) and ep.name.strip().lower() == clean_name.lower():
-                # Profile already exists — log in directly!
-                access_token, refresh_token = create_tokens(ep.id)
-                set_jwt_cookies(response, access_token, refresh_token)
-                log_audit_event(
-                    request_id=req_id,
-                    action="LOGIN_DIRECT",
-                    status="SUCCESS",
-                    patient_uid=ep.id,
-                    ip_address=req_raw.client.host,
-                    user_agent=req_raw.headers.get("User-Agent"),
-                    details=f"Patient {ep.name} logged into existing profile via direct registration form."
-                )
-                return {
-                    "success": True,
-                    "patient_uid": ep.id,
-                    "name": ep.name,
-                    "dob": clean_dob or (decrypt_value(ep.dob) if ep.dob else ""),
-                    "already_registered": True
-                }
-
-        # 2. Create new patient profile
-        new_uid = f"pat-{uuid.uuid4().hex[:12]}"
-        age = 0
-        if clean_dob:
-            try:
-                dob_date = datetime.strptime(clean_dob, "%Y-%m-%d")
-                age = (datetime.utcnow() - dob_date).days // 365
-            except Exception:
-                pass
-
-        new_pat = Patient(
-            id=new_uid,
-            name=clean_name,
-            dob=encrypt_value(clean_dob),
-            age=age,
-            gender="Unknown",
-            phone=encrypt_value(target_phone),
-            email=encrypt_value(""),
-            address=encrypt_value(""),
-            blood_group=encrypt_value(""),
-            emergency_contact=encrypt_value("")
-        )
-        db.add(new_pat)
-        db.commit()
-
-        # Log audit log
-        log_audit_event(
-            request_id=req_id,
-            action="REGISTER",
-            status="SUCCESS",
-            patient_uid=new_uid,
-            ip_address=req_raw.client.host,
-            user_agent=req_raw.headers.get("User-Agent"),
-            resource=f"patients/{new_uid}",
-            details=f"Registered patient '{clean_name}'"
-        )
-
-        # Issue JWT cookies automatically on successful registration
-        access_token, refresh_token = create_tokens(new_uid)
-        set_jwt_cookies(response, access_token, refresh_token)
-
-        return {
-            "success": True,
-            "patient_uid": new_uid,
-            "name": new_pat.name,
-            "dob": clean_dob
-        }
-    except Exception as e:
-        db.rollback()
-        if isinstance(e, HTTPException):
-            raise e
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        db.close()
+    """Direct registration is disabled. All registrations must be verified via Telegram OTP."""
+    raise HTTPException(
+        status_code=403,
+        detail="Direct registration is disabled. Please use the Telegram verification portal (@MedCare_Verify_Auth_bot) to register."
+    )
 
 
 def find_patient_in_db(db, patient_uid_or_phone: str, phone_str: str = ""):
@@ -623,107 +533,11 @@ def find_patient_in_db(db, patient_uid_or_phone: str, phone_str: str = ""):
 
 @app.post("/api/patients/login")
 async def login_patient(req: LoginRequest, req_raw: Request, response: Response):
-    """Authenticate patient directly using Patient ID, Date of Birth, and Mobile Number."""
-    response.headers["Cache-Control"] = "no-store"
-    req_id = str(uuid.uuid4())
-    ip_addr = req_raw.client.host
-
-    # 1. Check IP Lockout
-    ip_remaining = check_ip_lockout(ip_addr)
-    if ip_remaining:
-        raise HTTPException(
-            status_code=423,
-            detail=f"Too many failed login attempts. Temporarily locked. Try again in {int(ip_remaining // 60) + 1} minutes."
-        )
-
-    db = get_db()
-    try:
-        patient = find_patient_in_db(db, req.patient_uid, req.phone)
-
-        # 2. Validate Patient ID exists
-        if not patient:
-            increment_ip_failed_attempt(ip_addr)
-            log_audit_event(
-                request_id=req_id,
-                action="LOGIN",
-                status="FAILED",
-                patient_uid=req.patient_uid,
-                ip_address=ip_addr,
-                user_agent=req_raw.headers.get("User-Agent"),
-                details="Login failed: Patient ID or phone not found."
-            )
-            raise HTTPException(status_code=400, detail="Invalid Patient ID or Mobile Number. Please check your details or register.")
-
-        # 3. Check Account Lockout
-        acc_remaining = check_account_lockout(patient)
-        if acc_remaining:
-            raise HTTPException(
-                status_code=423,
-                detail=f"This account is temporarily locked. Try again in {int(acc_remaining.total_seconds() // 60) + 1} minutes."
-            )
-
-        # 4. Validate DOB match
-        target_dob = normalize_dob(req.dob)
-        dec_dob = normalize_dob(decrypt_value(patient.dob) if patient.dob else "")
-        if target_dob and dec_dob and dec_dob != target_dob:
-            increment_ip_failed_attempt(ip_addr)
-            increment_account_failed_attempt(db, patient, ip_addr)
-            
-            log_audit_event(
-                request_id=req_id,
-                action="LOGIN",
-                status="FAILED",
-                patient_uid=patient.id,
-                ip_address=ip_addr,
-                user_agent=req_raw.headers.get("User-Agent"),
-                details="Login failed: Date of Birth mismatch."
-            )
-            raise HTTPException(status_code=400, detail="Invalid Date of Birth.")
-
-        # 5. Validate Mobile Phone match
-        target_phone = normalize_phone_number(req.phone or "")
-        dec_phone = normalize_phone_number(decrypt_value(patient.phone) if patient.phone else "")
-        if target_phone and dec_phone and target_phone != dec_phone:
-            increment_ip_failed_attempt(ip_addr)
-            increment_account_failed_attempt(db, patient, ip_addr)
-            
-            log_audit_event(
-                request_id=req_id,
-                action="LOGIN",
-                status="FAILED",
-                patient_uid=patient.id,
-                ip_address=ip_addr,
-                user_agent=req_raw.headers.get("User-Agent"),
-                details="Login failed: Mobile phone mismatch."
-            )
-            raise HTTPException(status_code=400, detail="Mobile phone number does not match registered records.")
-
-        # 6. Clear failed attempts on credentials match
-        clear_ip_attempts(ip_addr)
-        clear_account_attempts(db, patient)
-
-        # 7. Issue secure JWT session tokens
-        access_token, refresh_token = create_tokens(patient.id)
-        set_jwt_cookies(response, access_token, refresh_token)
-
-        log_audit_event(
-            request_id=req_id,
-            action="LOGIN",
-            status="SUCCESS",
-            patient_uid=patient.id,
-            ip_address=ip_addr,
-            user_agent=req_raw.headers.get("User-Agent"),
-            details=f"Patient {patient.name} logged in successfully."
-        )
-
-        return {
-            "success": True, 
-            "message": "Signed in successfully.",
-            "patient_uid": patient.id,
-            "name": patient.name
-        }
-    finally:
-        db.close()
+    """Direct login is disabled. All sign-ins must be verified via Telegram OTP."""
+    raise HTTPException(
+        status_code=403,
+        detail="Direct sign-in is disabled. Please use the Telegram verification portal (@MedCare_Verify_Auth_bot) to receive your 6-digit login token."
+    )
 
 
 @app.post("/api/patients/select-profile")

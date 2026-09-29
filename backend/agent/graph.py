@@ -25,7 +25,7 @@ from tools.appointment_tool import (
     get_patient_appointments,
 )
 from tools.billing_tool import get_patient_bills, get_bill_details
-from tools.patient_tool import get_patient_info, get_medical_history, register_patient, verify_patient_credentials
+from tools.patient_tool import get_patient_info, get_medical_history
 from config import settings
 
 
@@ -70,8 +70,6 @@ async def build_graph():
         get_bill_details,
         get_patient_info,
         get_medical_history,
-        register_patient,
-        verify_patient_credentials,
     ]
 
     # Initialize the LLM dynamically depending on the selected provider

@@ -205,9 +205,9 @@ async def agent_node(state, config, primary_llm, tools):
         else:
             intent_directive = (
                 "\n\nIMPORTANT: The user wants to book or manage appointments, but they are NOT logged in. "
-                "You must ask them to Login or Register first. If they want to log in, prompt them for Name, "
-                "Patient ID, and DOB, then call verify_patient_credentials. If they want to register, call register_patient. "
-                "DO NOT call book_appointment until they are logged in."
+                "You must ask them to Sign In or Register first using the 'Sign In' or 'Register' button in the top navigation bar. "
+                "Explain that they will receive a secure 6-digit authorization token from our official Telegram bot (@MedCare_Verify_Auth_bot) "
+                "to verify their identity. DO NOT attempt to book appointments until they are authenticated."
             )
     elif classified_intent == "PROFILE_QUERY":
         if auth_uid:
@@ -219,13 +219,15 @@ async def agent_node(state, config, primary_llm, tools):
         else:
             intent_directive = (
                 "\n\nIMPORTANT: The user is asking about their personal records, but they are NOT logged in. "
-                "You must explain that they need to Login or Register first. If they want to log in, ask for Name, "
-                "Patient ID, and DOB, then call verify_patient_credentials."
+                "You must explain that they need to Sign In or Register first using the 'Sign In' button in the navigation header "
+                "to receive their 6-digit authorization code from @MedCare_Verify_Auth_bot on Telegram."
             )
     elif classified_intent == "DIRECT_ACTION":
         intent_directive = (
-            "\n\nIMPORTANT: The user wants to login/register/verify. DO NOT call any tools. "
-            "Guide them through the authentication process using the UI."
+            "\n\nIMPORTANT: The user wants to login, register, or verify their account. DO NOT call any tools. "
+            "Politely guide them to click the 'Sign In' or 'Register' button in the top header. "
+            "Explain that clicking the button will open our official Telegram bot (@MedCare_Verify_Auth_bot) "
+            "to generate their secure 6-digit verification token."
         )
     elif classified_intent == "HOSPITAL_INFO":
         intent_directive = (
