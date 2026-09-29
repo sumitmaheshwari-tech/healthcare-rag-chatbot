@@ -104,4 +104,8 @@ async def api_fallback(path: str, request: Request):
             "details": _backend_error,
             "traceback": _backend_traceback
         }, status_code=500)
-    return JSONResponse({"error": f"Path /api/{path} not found"}, status_code=404)
+    return JSONResponse({
+        "error": f"Path /api/{path} not found",
+        "scope_path": request.scope.get("path"),
+        "headers": dict(request.headers)
+    }, status_code=404)
