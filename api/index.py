@@ -6,6 +6,7 @@ Vercel Serverless Function entry point for MedCare FastAPI Backend.
 import sys
 import os
 from pathlib import Path
+from urllib.parse import parse_qs, urlencode
 
 # Add paths to sys.path
 current_dir = Path(__file__).resolve().parent
@@ -36,76 +37,59 @@ if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
     if not chroma_dir or "/tmp" not in chroma_dir:
         os.environ["CHROMA_PERSIST_DIR"] = "/tmp/chroma_db"
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
 
-# Initialize top-level app so Vercel always has a valid ASGI entrypoint
-app = FastAPI(title="MedCare API Portal")
+# Attempt to load the primary backend FastAPI application
+try:
+    import backend.main as bm
+    backend_app = bm.app
+    _load_error = None
+except Exception as e:
+    import traceback
+    _load_error = {
+        "error": "Backend modules failed to initialize",
+        "details": str(e),
+        "traceback": traceback.format_exc()
+    }
+    backend_app = FastAPI(title="MedCare API Portal (Degraded)")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|.*\.vercel\.app)(:\d+)?",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    @backend_app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+    async def degraded_fallback(path: str):
+        return JSONResponse(_load_error, status_code=500)
 
-_backend_loaded = False
-_backend_error = None
-_backend_traceback = None
 
-def _load_backend_safely():
-    global _backend_loaded, _backend_error, _backend_traceback
-    if _backend_loaded:
-        return True
-    try:
-        import backend.main as bm
-        # Include all routes from backend.main.app into this app
-        for route in bm.app.routes:
-            if route not in app.routes:
-                app.routes.append(route)
-        _backend_loaded = True
-        return True
-    except Exception as e:
-        import traceback
-        _backend_error = str(e)
-        _backend_traceback = traceback.format_exc()
-        print(f"[BACKEND LOAD ERROR]: {_backend_error}\n{_backend_traceback}")
-        return False
+class VercelASGIApp:
+    """
+    Transparent ASGI wrapper that restores the original request path from
+    the Vercel rewrite parameter '__orig_path', strips it from the query string,
+    and forwards the call cleanly to FastAPI.
+    """
+    def __init__(self, target_app):
+        self.target_app = target_app
+        self.routes = getattr(target_app, "routes", [])
+        self.router = getattr(target_app, "router", None)
+        self.middleware_stack = getattr(target_app, "middleware_stack", None)
 
-# Attempt initial load
-_load_backend_safely()
+    def __getattr__(self, name):
+        return getattr(self.target_app, name)
 
-@app.get("/api/health")
-async def health_check():
-    """Health check endpoint that reports system status or backend diagnostics."""
-    if _load_backend_safely():
-        import backend.main as bm
-        # Delegate to backend's health check logic
-        return await bm.health_check()
-    else:
-        return JSONResponse({
-            "status": "degraded",
-            "backend_loaded": False,
-            "error": _backend_error,
-            "traceback": _backend_traceback,
-            "sys_path": sys.path,
-            "cwd": os.getcwd(),
-            "cwd_files": os.listdir(".") if os.path.exists(".") else []
-        }, status_code=200)
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http":
+            query_string = scope.get("query_string", b"").decode("utf-8", errors="ignore")
+            params = parse_qs(query_string)
 
-@app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
-async def api_fallback(path: str, request: Request):
-    """Fallback handler in case backend routes could not load."""
-    if not _load_backend_safely():
-        return JSONResponse({
-            "error": "Backend modules failed to initialize",
-            "details": _backend_error,
-            "traceback": _backend_traceback
-        }, status_code=500)
-    return JSONResponse({
-        "error": f"Path /api/{path} not found",
-        "scope_path": request.scope.get("path"),
-        "headers": dict(request.headers)
-    }, status_code=404)
+            if "__orig_path" in params and params["__orig_path"]:
+                orig_path = params.pop("__orig_path")[0]
+                scope["path"] = orig_path
+                scope["raw_path"] = orig_path.encode("utf-8")
+                # Re-encode query string without the __orig_path parameter
+                scope["query_string"] = urlencode(params, doseq=True).encode("utf-8")
+            elif scope.get("path") in ["/api/index.py", "/api"]:
+                scope["path"] = "/api/health"
+                scope["raw_path"] = b"/api/health"
+
+        await self.target_app(scope, receive, send)
+
+
+app = VercelASGIApp(backend_app)
