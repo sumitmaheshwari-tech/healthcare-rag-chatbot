@@ -20,7 +20,7 @@ if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
     os.environ["VERCEL"] = "1"
     os.environ.setdefault("ENV", "production")
     
-    SUPABASE_POOLER_URL = "postgresql://postgres.wztqumimqknwgeqdvvfc:NTOcGyC5IpSvxqRN@aws-0-ap-south-1.pooler.supabase.com:6543/postgres?sslmode=require"
+    SUPABASE_POOLER_URL = "postgresql+psycopg2://postgres.wztqumimqknwgeqdvvfc:NTOcGyC5IpSvxqRN@aws-0-ap-south-1.pooler.supabase.com:6543/postgres?sslmode=require"
     db_url = os.environ.get("DATABASE_URL", "")
     if not db_url or ("sqlite" in db_url and "/tmp" not in db_url):
         os.environ["DATABASE_URL"] = SUPABASE_POOLER_URL

@@ -54,11 +54,16 @@ class Settings:
         CHROMA_PERSIST_DIR: str = _raw_chroma
     CHROMA_COLLECTION: str = "hospital_knowledge"
 
-    # Database — Render/Vercel provides postgres:// URLs, SQLAlchemy 2.0 needs postgresql://
+    # Database — Ensure explicit postgresql+psycopg2 driver for SQLAlchemy 2.0
     _raw_db_url: str = os.getenv("DATABASE_URL", "sqlite:///./hospital.db")
     if (os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME")) and "sqlite" in _raw_db_url and "/tmp" not in _raw_db_url:
         _raw_db_url = "sqlite:////tmp/hospital.db"
-    DATABASE_URL: str = _raw_db_url.replace("postgres://", "postgresql://", 1) if _raw_db_url.startswith("postgres://") else _raw_db_url
+    if _raw_db_url.startswith("postgres://"):
+        DATABASE_URL: str = _raw_db_url.replace("postgres://", "postgresql+psycopg2://", 1)
+    elif _raw_db_url.startswith("postgresql://") and "+psycopg" not in _raw_db_url:
+        DATABASE_URL: str = _raw_db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    else:
+        DATABASE_URL: str = _raw_db_url
 
     # Paths
     BASE_DIR: Path = Path(__file__).resolve().parent

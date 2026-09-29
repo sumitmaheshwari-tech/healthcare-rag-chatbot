@@ -17,6 +17,7 @@ redis>=5.0.0
 langgraph-checkpoint-sqlite>=3.0.0
 aiosqlite>=0.20.0
 psycopg2-binary>=2.9.9
+psycopg[binary]>=3.1.0
 langchain-nvidia-ai-endpoints>=0.3.0
 requests>=2.31.0
 rank-bm25>=0.2.2
