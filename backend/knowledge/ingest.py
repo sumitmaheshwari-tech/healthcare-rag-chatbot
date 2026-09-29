@@ -21,13 +21,18 @@ except ImportError:
 from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_chroma import Chroma
+
+try:
+    from langchain_chroma import Chroma
+except Exception as e:
+    Chroma = None
+    print(f"[RAG] ChromaDB not available in this environment: {e}")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import settings
 
 # Module-level singletons
-vectorstore: Chroma | None = None
+vectorstore = None
 retriever = None
 bm25_retriever = None
 
@@ -214,7 +219,7 @@ def ingest_documents() -> Chroma | None:
     persist_dir = Path(settings.CHROMA_PERSIST_DIR + "_" + dim_suffix)
 
     # ── Re-use existing store if present ──────────────────────────────
-    if os.path.exists(persist_dir) and os.listdir(persist_dir):
+    if Chroma is not None and os.path.exists(persist_dir) and os.listdir(persist_dir):
         print("[RAG] Loading existing ChromaDB vector store …")
         try:
             vectorstore = Chroma(
@@ -280,17 +285,22 @@ def ingest_documents() -> Chroma | None:
     print(f"[RAG] In-memory BM25 index created successfully with {len(chunks)} chunks.")
 
     # Embed & store using embeddings (ChromaDB)
-    try:
-        vectorstore = Chroma.from_documents(
-            documents=chunks,
-            embedding=embeddings,
-            persist_directory=str(persist_dir),
-            collection_name=settings.CHROMA_COLLECTION,
-        )
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
-        print(f"[RAG] ChromaDB vector store created successfully with {len(chunks)} chunks.")
-    except Exception as e:
-        print(f"[RAG WARNING] ChromaDB vectorstore creation failed: {e}. Falling back to BM25-only lexical retriever.")
+    if Chroma is not None:
+        try:
+            vectorstore = Chroma.from_documents(
+                documents=chunks,
+                embedding=embeddings,
+                persist_directory=str(persist_dir),
+                collection_name=settings.CHROMA_COLLECTION,
+            )
+            retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+            print(f"[RAG] ChromaDB vector store created successfully with {len(chunks)} chunks.")
+        except Exception as e:
+            print(f"[RAG WARNING] ChromaDB vectorstore creation failed: {e}. Falling back to BM25-only lexical retriever.")
+            vectorstore = None
+            retriever = None
+    else:
+        print("[RAG] ChromaDB is unavailable. Operating in BM25-only lexical mode.")
         vectorstore = None
         retriever = None
 
