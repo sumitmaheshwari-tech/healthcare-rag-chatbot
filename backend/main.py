@@ -84,22 +84,22 @@ async def lifespan(app: FastAPI):
     print("  MedCare RAG Chatbot — Starting up …")
     print("=" * 60)
 
-    # 1. Database (Persistent Storage for All Patients & Appointments)
-    print("\n[1/3] Initialising database …")
-    try:
-        init_db()
-        db = get_db()
-        seed_database(db)
-        db.close()
-        print("[1/3] Database tables ensured & patient data preserved.\n")
-    except Exception as e:
-        print(f"[DB WARNING] Database setup warning: {e}\n")
-
     is_serverless = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
     if is_serverless:
-        print("[SERVERLESS] Vercel Serverless environment detected.")
-        print("[SERVERLESS] Deferring knowledge base and agent graph to lazy-load on first chat query.\n")
+        print("[SERVERLESS] Serverless environment detected — instant cold-start enabled.")
+        print("[SERVERLESS] Deferring DB setup, knowledge base, and agent graph to lazy-load on demand.\n")
     else:
+        # 1. Database (Persistent Storage for All Patients & Appointments)
+        print("\n[1/3] Initialising database …")
+        try:
+            init_db()
+            db = get_db()
+            seed_database(db)
+            db.close()
+            print("[1/3] Database tables ensured & patient data preserved.\n")
+        except Exception as e:
+            print(f"[DB WARNING] Database setup warning: {e}\n")
+
         # 2. Knowledge base
         print("[2/3] Ingesting knowledge base …")
         try:
@@ -135,7 +135,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex="https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?",
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|.*\.vercel\.app)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
