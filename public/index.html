@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MedCare Assistant | Secure Healthcare Portal</title>
+    <meta name="description" content="MedCare General Hospital's secure administrative AI assistant. Check appointments, medical records, billing details, and hospital guides.">
+    <meta name="robots" content="noindex, nofollow">
+
+    <!-- Google Fonts: rounded Nunito for headers, Inter for legible body -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- FontAwesome 6 Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+    <!-- Custom Light Stylesheet with Cache Buster -->
+    <link rel="stylesheet" href="/static/style.css?v=3.0">
+</head>
+<body>
+    <!-- Calming Background Flows -->
+    <div class="bg-pattern"></div>
+    <div class="bg-glow bg-glow-1"></div>
+    <div class="bg-glow bg-glow-2"></div>
+
+    <!-- App Container -->
+    <div class="app-container" id="app-container">
+
+        <!-- ─── Calming Header ───────────────────────────────────── -->
+        <header class="chat-header" id="chat-header">
+            <div class="header-left">
+                <div class="logo-icon" aria-hidden="true">
+                    <i class="fas fa-heartbeat"></i>
+                </div>
+                <div class="header-text">
+                    <h1>MedCare Assistant</h1>
+                    <span class="status-badge" id="status-badge">
+                        <span class="status-dot"></span> Secure & HIPAA Compliant
+                    </span>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="auth-panel" id="auth-panel">
+                    <!-- Status Display when Logged Out -->
+                    <div id="auth-logged-out" class="auth-status-container">
+                        <span id="auth-status-text" class="auth-status-text">
+                            <i class="fas fa-user-shield" aria-hidden="true"></i> Anonymous Guest
+                        </span>
+                    </div>
+
+                    <!-- Status Display when Logged In -->
+                    <div id="auth-logged-in" class="auth-status-container hidden">
+                        <span id="auth-verified-text" class="auth-status-text">
+                            <i class="fas fa-user-check" style="color: #2f855a;" aria-hidden="true"></i> Verified Patient
+                        </span>
+                        <button id="logout-btn" class="auth-toggle-btn logout-btn">
+                            <i class="fas fa-sign-out-alt" aria-hidden="true"></i> Log Out
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- ─── Secure Auth Gate Overlay ─────────────────────────── -->
+        <div id="auth-overlay" class="auth-overlay">
+            <div class="auth-card-wrapper">
+                
+                <!-- Sign In Card -->
+                <div id="login-card" class="auth-card-inner">
+                    <div class="card-header-icon"><i class="fas fa-lock"></i></div>
+                    <h2>Secure Patient Sign In</h2>
+                    <p class="auth-subtitle" id="login-subtitle">Sign in instantly with your Mobile Number or Patient ID.</p>
+                    
+                    <form id="login-form" class="auth-form-el">
+                        <div id="login-credentials-group">
+                            <div class="auth-input-group">
+                                <label for="login-phone">Registered Mobile Number</label>
+                                <div class="phone-input-wrapper">
+                                    <span class="phone-prefix">🇮🇳 +91</span>
+                                    <input type="tel" id="login-phone" required placeholder="9876543210" autocomplete="tel">
+                                </div>
+                            </div>
+                            <div class="auth-input-group">
+                                <label for="login-dob">Date of Birth <span style="font-size:0.75rem;color:#718096;">(Optional)</span></label>
+                                <input type="date" id="login-dob">
+                            </div>
+                            <div class="auth-input-group">
+                                <label for="login-uid">Patient ID <span style="font-size:0.75rem;color:#718096;">(Optional)</span></label>
+                                <input type="text" id="login-uid" placeholder="pat-xxxx (or leave blank)" autocomplete="username">
+                            </div>
+                        </div>
+
+                        <!-- Step 2: Telegram OTP Verification -->
+                        <div id="login-otp-group" class="auth-input-group hidden">
+                            <div class="telegram-step-box">
+                                <strong><i class="fab fa-telegram" style="color: #0088cc;"></i> Step 1:</strong> Tap below to open our official bot and receive your security code directly in Telegram:
+                            </div>
+                            <a id="login-telegram-link" href="https://t.me/MedCare_Verify_Auth_bot" target="_blank" rel="noopener noreferrer" class="telegram-open-btn">
+                                <i class="fab fa-telegram-plane"></i> Tap to Open @MedCare_Verify_Auth_bot
+                            </a>
+                            <label for="login-otp" style="margin-top: 6px;">Enter 6-Digit Telegram Code</label>
+                            <input type="text" id="login-otp" class="otp-input-field" maxlength="6" placeholder="• • • • • •" pattern="\d{6}">
+                            <div class="otp-actions">
+                                <span class="otp-hint-text" style="font-size: 0.78rem; color: #718096;">
+                                    Tap START in Telegram to receive code.
+                                </span>
+                                <a href="#" id="login-back-btn" class="otp-back-link">
+                                    <i class="fas fa-arrow-left"></i> Change Details
+                                </a>
+                            </div>
+                            <button type="button" id="login-skip-to-register-btn" class="auth-btn" style="background:#475569;margin-top:12px;font-size:0.85rem;padding:9px 12px;">⚡ Need an account? Register directly</button>
+                        </div>
+
+                        <div class="auth-error-box hidden" id="login-error"></div>
+                        <button type="submit" id="login-submit-btn" class="auth-btn">📲 Get OTP on Telegram</button>
+                    </form>
+                    <p class="auth-switch" id="login-switch-container">New patient? <a href="#" id="switch-to-register">Register profile here</a></p>
+                </div>
+
+                <!-- Registration Card -->
+                <div id="register-card" class="auth-card-inner hidden">
+                    <div class="card-header-icon"><i class="fas fa-user-plus"></i></div>
+                    <h2>Register Patient Profile</h2>
+                    <p class="auth-subtitle" id="register-subtitle">Create a new profile or add a family member under your mobile number.</p>
+                    
+                    <form id="register-form" class="auth-form-el">
+                        <div id="register-credentials-group">
+                            <div class="auth-input-group">
+                                <label for="register-name">Full Name</label>
+                                <input type="text" id="register-name" required placeholder="e.g. Rahul Sharma" autocomplete="name">
+                            </div>
+                            <div class="auth-input-group">
+                                <label for="register-dob">Date of Birth</label>
+                                <input type="date" id="register-dob" required>
+                            </div>
+                            <div class="auth-input-group">
+                                <label for="register-phone">Mobile Phone</label>
+                                <div class="phone-input-wrapper">
+                                    <span class="phone-prefix">🇮🇳 +91</span>
+                                    <input type="tel" id="register-phone" required placeholder="9876543210" autocomplete="tel">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Step 2: Telegram OTP Verification -->
+                        <div id="register-otp-group" class="auth-input-group hidden">
+                            <div class="telegram-step-box">
+                                <strong><i class="fab fa-telegram" style="color: #0088cc;"></i> Step 1:</strong> Tap below to open our official bot and receive your security code directly in Telegram:
+                            </div>
+                            <a id="register-telegram-link" href="https://t.me/MedCare_Verify_Auth_bot" target="_blank" rel="noopener noreferrer" class="telegram-open-btn">
+                                <i class="fab fa-telegram-plane"></i> Tap to Open @MedCare_Verify_Auth_bot
+                            </a>
+                            <label for="register-otp" style="margin-top: 6px;">Enter 6-Digit Telegram Code</label>
+                            <input type="text" id="register-otp" class="otp-input-field" maxlength="6" placeholder="• • • • • •" pattern="\d{6}">
+                            <div class="otp-actions">
+                                <span class="otp-hint-text" style="font-size: 0.78rem; color: #718096;">
+                                    Tap START in Telegram to receive code.
+                                </span>
+                                <a href="#" id="register-back-btn" class="otp-back-link">
+                                    <i class="fas fa-arrow-left"></i> Change Details
+                                </a>
+                            </div>
+                            <button type="button" id="register-skip-otp-btn" class="auth-btn" style="background:#475569;margin-top:12px;font-size:0.85rem;padding:9px 12px;">⚡ Don't have Telegram? Register directly</button>
+                        </div>
+
+                        <div class="auth-error-box hidden" id="register-error"></div>
+                        <button type="button" id="register-direct-btn" class="auth-btn" style="background:#2563eb;margin-bottom:8px;">⚡ Instant Register & Sign In</button>
+                        <button type="submit" id="register-submit-btn" class="auth-btn register-btn" style="background:#0284c7;">📲 Or Verify via Telegram OTP</button>
+                    </form>
+                    <p class="auth-switch" id="register-switch-container">Already registered? <a href="#" id="switch-to-login">Sign In here</a></p>
+                </div>
+
+                <!-- Family Multi-Profile Selection Card -->
+                <div id="profile-select-card" class="auth-card-inner hidden">
+                    <div class="card-header-icon"><i class="fas fa-users"></i></div>
+                    <h2>Who is visiting today?</h2>
+                    <p class="auth-subtitle">Multiple patient profiles are linked to this mobile number. Select who needs care:</p>
+                    
+                    <div id="profile-list-container" class="profile-list-wrapper">
+                        <!-- Populated dynamically by script.js -->
+                    </div>
+
+                    <button type="button" id="add-family-member-btn" class="auth-btn" style="background:#334155;margin-top:10px;">
+                        <i class="fas fa-user-plus"></i> + Add New Family Member
+                    </button>
+                    <p class="auth-switch" style="margin-top:14px;"><a href="#" id="switch-back-to-login"><i class="fas fa-arrow-left"></i> Use a different phone number</a></p>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- ─── Conversational Area (Gated) ──────────────────────── -->
+        <main class="chat-messages hidden" id="chat-messages" aria-label="Conversation history">
+            <!-- Messages are injected dynamically by script.js -->
+        </main>
+
+        <!-- ─── Quick Navigation Chips (Gated) ───────────────────── -->
+        <nav class="quick-actions hidden" id="quick-actions" aria-label="Quick Actions">
+            <button class="action-chip" data-message="What departments does the hospital have?">
+                <i class="fas fa-hospital"></i> Departments
+            </button>
+            <button class="action-chip" data-message="Show me my upcoming appointments">
+                <i class="fas fa-calendar-check"></i> My Appointments
+            </button>
+            <button class="action-chip" data-message="Show me my pending bills">
+                <i class="fas fa-file-invoice-dollar"></i> My Bills
+            </button>
+            <button class="action-chip" data-message="Show me my medical records">
+                <i class="fas fa-notes-medical"></i> My Records
+            </button>
+            <button class="action-chip" data-message="I want to book an appointment">
+                <i class="fas fa-calendar-plus"></i> Book Appointment
+            </button>
+            <button class="action-chip" data-message="What insurance plans do you accept?">
+                <i class="fas fa-shield-halved"></i> Insurance Info
+            </button>
+        </nav>
+
+        <!-- ─── Text Input Area (Gated) ─────────────────────────── -->
+        <footer class="chat-input-container hidden" id="chat-input-container">
+            <div class="input-wrapper">
+                <textarea
+                    id="message-input"
+                    placeholder="How can I help you today? Ask me about schedules, bills, or hospital info..."
+                    rows="1"
+                    aria-label="Type your message"
+                ></textarea>
+                <button id="send-btn" class="send-button" disabled aria-label="Send message">
+                    <i class="fas fa-paper-plane" aria-hidden="true"></i>
+                </button>
+            </div>
+            <p class="disclaimer">
+                <i class="fas fa-info-circle" aria-hidden="true"></i>
+                MedCare Assistant provides administrative help. For medical concerns, please consult a clinical doctor.
+            </p>
+        </footer>
+    </div>
+
+    <!-- Frontend logic client with Cache Buster -->
+    <script src="/static/script.js?v=3.2"></script>
+</body>
+</html>

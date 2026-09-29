@@ -1721,16 +1721,23 @@ if frontend_dir.exists():
 
 @app.get("/")
 async def serve_frontend():
-    index = frontend_dir / "index.html"
-    if index.exists():
-        return FileResponse(
-            str(index),
-            headers={
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Pragma": "no-cache",
-                "Expires": "0"
-            }
-        )
+    candidates = [
+        frontend_dir / "index.html",
+        BACKEND_DIR.parent / "public" / "index.html",
+        Path("public/index.html"),
+        Path("/var/task/public/index.html"),
+        Path("/var/task/frontend/index.html"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return FileResponse(
+                str(candidate),
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0"
+                }
+            )
     return {"message": "Frontend not found. API is running at /api/"}
 
 
