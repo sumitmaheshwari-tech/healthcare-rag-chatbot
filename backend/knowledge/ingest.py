@@ -1,4 +1,5 @@
 """Document ingestion pipeline — loads, chunks, embeds, and stores hospital knowledge in ChromaDB."""
+from __future__ import annotations
 
 import os
 import sys
@@ -201,7 +202,7 @@ def _get_embeddings():
     return _cached_embeddings
 
 
-def ingest_documents() -> Chroma | None:
+def ingest_documents():
     """Load, chunk, embed, and store hospital knowledge documents in ChromaDB & BM25."""
     global vectorstore, retriever, bm25_retriever
 
