@@ -9,79 +9,11 @@ let currentPatientId = '';      // Starts as empty/unauthenticated
 let currentPatientName = '';
 let isProcessing = false;
 
-// ── Google Firebase Configuration for SMS OTP ────────────────
-const firebaseConfig = {
-    apiKey: "AIzaSyC9Oz-tsztPrZglerrZa7XKVhBnD-4gFe8",
-    authDomain: "medcare-5d8d1.firebaseapp.com",
-    projectId: "medcare-5d8d1",
-    storageBucket: "medcare-5d8d1.firebasestorage.app",
-    messagingSenderId: "147357518477",
-    appId: "1:147357518477:web:61d4911e17fa57f32430c4",
-    measurementId: "G-4DX72QDKPW"
-};
-
-if (typeof firebase !== 'undefined' && !firebase.apps.length) {
-    try {
-        firebase.initializeApp(firebaseConfig);
-        console.log("[FIREBASE] Initialized successfully for SMS Phone Auth.");
-    } catch (e) {
-        console.error("[FIREBASE INIT ERROR]", e);
-    }
-}
-
-let recaptchaVerifier = null;
-let phoneConfirmationResult = null;
-let registerConfirmationResult = null;
-
-function resetRecaptcha() {
-    if (recaptchaVerifier) {
-        try {
-            recaptchaVerifier.clear();
-        } catch (e) {}
-        recaptchaVerifier = null;
-    }
-    // Fully replace DOM container node so Google reCAPTCHA never throws "already rendered in this element"
-    const oldContainer = document.getElementById('recaptcha-container');
-    if (oldContainer && oldContainer.parentNode) {
-        const newContainer = document.createElement('div');
-        newContainer.id = 'recaptcha-container';
-        oldContainer.parentNode.replaceChild(newContainer, oldContainer);
-    }
-}
-
-function getRecaptchaVerifier() {
-    if (typeof firebase === 'undefined') return null;
-
-    if (!recaptchaVerifier) {
-        let container = document.getElementById('recaptcha-container');
-        if (!container) {
-            container = document.createElement('div');
-            container.id = 'recaptcha-container';
-            document.body.appendChild(container);
-        } else {
-            container.innerHTML = '';
-        }
-
-        recaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', {
-            size: 'invisible',
-            callback: () => {},
-            'expired-callback': () => {
-                console.warn("[RECAPTCHA] Expired, resetting");
-                resetRecaptcha();
-            }
-        });
-    }
-    return recaptchaVerifier;
-}
-
-function formatE164(phone) {
-    if (!phone) return '';
-    let cleaned = phone.replace(/[^0-9+]/g, '');
-    if (cleaned.startsWith('+')) return cleaned;
-    if (cleaned.startsWith('0')) cleaned = cleaned.substring(1);
-    if (cleaned.length === 10) return '+91' + cleaned;
-    return '+' + cleaned;
-}
+// ── Telegram Authentication State ─────────────────────────────
+let currentLoginSessionId = '';
+let currentRegisterSessionId = '';
+let loginTelegramLink = null;
+let registerTelegramLink = null;
 
 // ── DOM Elements ──────────────────────────────────────────────
 let chatMessages, messageInput, sendBtn, quickActions, statusBadge;
@@ -134,6 +66,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loginOtpGroup       = document.getElementById('login-otp-group');
     loginOtpInput       = document.getElementById('login-otp');
     loginBackBtn        = document.getElementById('login-back-btn');
+    loginTelegramLink   = document.getElementById('login-telegram-link');
     
     registerNameInput   = document.getElementById('register-name');
     registerDobInput    = document.getElementById('register-dob');
@@ -144,6 +77,7 @@ document.addEventListener('DOMContentLoaded', () => {
     registerOtpGroup    = document.getElementById('register-otp-group');
     registerOtpInput    = document.getElementById('register-otp');
     registerBackBtn     = document.getElementById('register-back-btn');
+    registerTelegramLink = document.getElementById('register-telegram-link');
     registerDirectBtn   = document.getElementById('register-direct-btn');
     registerSkipOtpBtn  = document.getElementById('register-skip-otp-btn');
     loginSkipToRegisterBtn = document.getElementById('login-skip-to-register-btn');
@@ -553,8 +487,7 @@ function setupEventListeners() {
     });
 }
 
-// ── Phone & Recaptcha Helpers ─────────────────────────────────
-// ── Gated Authentication Form Listeners ───────────────────────
+// ── Telegram Authentication Form Listeners ───────────────────────
 
 // ── Family Profile Selector Helpers ───────────────────────────
 function showFamilyProfileSelector(profiles, phone) {
@@ -632,8 +565,7 @@ function setupAuthFormListeners() {
             loginCard.classList.remove('hidden');
             loginCredentialsGroup.classList.remove('hidden');
             loginOtpGroup.classList.add('hidden');
-            loginSubmitBtn.textContent = '📲 Send SMS OTP to Phone';
-            resetRecaptcha();
+            loginSubmitBtn.textContent = '📲 Get OTP on Telegram';
         });
     }
 
@@ -644,91 +576,16 @@ function setupAuthFormListeners() {
             registerCard.classList.remove('hidden');
             registerCredentialsGroup.classList.remove('hidden');
             registerOtpGroup.classList.add('hidden');
-            registerSubmitBtn.textContent = '📲 Send SMS OTP to Phone';
+            registerSubmitBtn.textContent = '📲 Get OTP on Telegram';
             if (lastVerifiedPhone) {
                 registerPhoneInput.value = lastVerifiedPhone;
             }
             registerNameInput.value = '';
             registerNameInput.focus();
-            resetRecaptcha();
         });
     }
 
-    // Helper to format Firebase Phone Auth errors with guidance
-    function formatFirebaseError(err) {
-        console.error("[FIREBASE AUTH ERROR]", err);
-        const msg = (err && err.message) ? err.message : '';
-        const code = (err && err.code) ? err.code : '';
-
-        // 1. Firebase Cloud Billing required for real physical SMS on Spark plan
-        if (code === 'auth/billing-not-enabled' ||
-            msg.toLowerCase().includes('bill') ||
-            msg.toLowerCase().includes('billing')) {
-            return `
-                <div style="text-align:left;line-height:1.45;padding:6px 2px;">
-                    <div style="font-weight:700;color:#dc2626;margin-bottom:6px;">
-                        <i class="fas fa-credit-card"></i> Firebase Cloud Billing Required for Cellular SMS
-                    </div>
-                    <p style="margin:0 0 6px 0;font-size:0.83rem;color:#374151;">
-                        Google requires an active Cloud Billing account (Blaze plan) to send real physical SMS to mobile carriers.
-                    </p>
-                    <div style="background:#f0fdf4;border:1px solid #bbf7d0;padding:8px 10px;border-radius:6px;font-size:0.82rem;color:#166534;margin-bottom:8px;">
-                        <strong>✨ Test Free Now Without a Credit Card:</strong>
-                        <ol style="margin:4px 0 0 16px;padding:0;font-size:0.80rem;">
-                            <li>Go to <a href="https://console.firebase.google.com/project/medcare-5d8d1/authentication/providers" target="_blank" rel="noopener noreferrer" style="color:#15803d;text-decoration:underline;font-weight:600;">Firebase Console &rarr; Sign-in method &rarr; Phone</a></li>
-                            <li>Scroll to <b>Phone numbers for testing (optional)</b></li>
-                            <li>Add your number: <code>+91 7037100608</code> and code: <code>123456</code></li>
-                            <li>Click <b>Save</b> &mdash; you can verify immediately with code <code>123456</code>!</li>
-                        </ol>
-                    </div>
-                    <p style="margin:0;font-size:0.77rem;color:#6b7280;">
-                        Or upgrade your Firebase project to Blaze (pay-as-you-go) to send real SMS (10,000 free SMS/mo).
-                    </p>
-                </div>
-            `;
-        }
-
-        // 2. SMS Region Policy
-        if (code === 'auth/sms-region-not-supported' ||
-            msg.toLowerCase().includes('region') ||
-            msg.toLowerCase().includes('not enabled') ||
-            code === 'auth/operation-not-allowed') {
-            return `
-                <div style="text-align:left;line-height:1.45;padding:4px 0;">
-                    <div style="font-weight:700;color:#dc2626;margin-bottom:6px;">
-                        <i class="fas fa-globe-asia"></i> SMS Not Enabled for India (+91)
-                    </div>
-                    <p style="margin:0 0 6px 0;font-size:0.83rem;color:#374151;">
-                        Firebase requires enabling the <b>SMS Region Policy</b> for India in your console:
-                    </p>
-                    <ol style="margin:0 0 8px 18px;padding:0;font-size:0.82rem;color:#1f2937;">
-                        <li>Open <a href="https://console.firebase.google.com/project/medcare-5d8d1/authentication/settings" target="_blank" rel="noopener noreferrer" style="color:#2563eb;text-decoration:underline;font-weight:600;">Firebase Console &rarr; SMS Settings</a></li>
-                        <li>Under <b>SMS region policy</b>, select <b>Allow</b> &amp; check <b>India (+91)</b></li>
-                        <li>Click <b>Save</b></li>
-                    </ol>
-                    <div style="background:#eff6ff;border:1px solid #bfdbfe;padding:6px 8px;border-radius:6px;font-size:0.78rem;color:#1e40af;margin-top:6px;">
-                        💡 <b>Tip for Instant Testing:</b> In Firebase Console &rarr; <i>Sign-in method</i> &rarr; <i>Phone</i> &rarr; <i>Phone numbers for testing</i>, add a test number (e.g. <code>+91 9999999999</code> with code <code>123456</code>) to test instantly with zero wait!
-                    </div>
-                </div>
-            `;
-        }
-
-        if (code === 'auth/invalid-phone-number') {
-            return 'Please enter a valid 10-digit mobile number.';
-        }
-        if (code === 'auth/quota-exceeded') {
-            return 'Firebase SMS quota exceeded for today. Please try again tomorrow or use a configured test phone number.';
-        }
-        if (code === 'auth/too-many-requests') {
-            return 'Too many SMS requests from this device. Please wait a few minutes before trying again.';
-        }
-        if (code === 'auth/captcha-check-failed') {
-            return 'Security reCAPTCHA verification failed. Please tap Send SMS again.';
-        }
-        return msg || 'Failed to send SMS OTP. Please check your network and mobile number.';
-    }
-
-    // 2. Sign In Form (Pure Firebase Phone Auth SMS OTP)
+    // 2. Sign In Form (Dedicated Telegram Bot OTP Gateway)
     loginForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         loginErrorBox.classList.add('hidden');
@@ -736,25 +593,44 @@ function setupAuthFormListeners() {
         const uid = loginUidInput.value.trim();
         const dob = loginDobInput.value.trim();
         const phone = loginPhoneInput.value.trim();
-        const formattedPhone = formatE164(phone);
 
-        // Step 1: Send SMS OTP
+        // Step 1: Initiate Telegram OTP Session
         if (loginOtpGroup.classList.contains('hidden')) {
             loginSubmitBtn.disabled = true;
-            loginSubmitBtn.textContent = 'Sending SMS Code...';
+            loginSubmitBtn.textContent = 'Opening Telegram Gateway...';
 
-            if (!formattedPhone || formattedPhone.length < 10) {
+            if (!phone || phone.replace(/\D/g, '').length < 10) {
                 loginErrorBox.textContent = 'Please enter a valid 10-digit mobile number.';
                 loginErrorBox.classList.remove('hidden');
                 loginSubmitBtn.disabled = false;
-                loginSubmitBtn.textContent = '📲 Send SMS OTP to Phone';
+                loginSubmitBtn.textContent = '📲 Get OTP on Telegram';
                 return;
             }
 
             try {
-                const appVerifier = getRecaptchaVerifier();
-                phoneConfirmationResult = await firebase.auth().signInWithPhoneNumber(formattedPhone, appVerifier);
-                console.log("[FIREBASE] SMS verification code sent to", formattedPhone);
+                const res = await fetch(`${API_BASE}/api/auth/telegram/initiate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        flow: 'login',
+                        patient_uid: uid,
+                        dob: dob,
+                        phone: phone
+                    })
+                });
+
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || 'No account found with this phone number. Please click "Register profile here".');
+                }
+
+                const data = await res.json();
+                currentLoginSessionId = data.auth_session_id;
+
+                if (loginTelegramLink && data.telegram_url) {
+                    loginTelegramLink.href = data.telegram_url;
+                    window.open(data.telegram_url, '_blank');
+                }
 
                 loginCredentialsGroup.classList.add('hidden');
                 loginOtpGroup.classList.remove('hidden');
@@ -764,18 +640,18 @@ function setupAuthFormListeners() {
                 loginSubmitBtn.disabled = false;
                 loginSubmitBtn.textContent = 'Verify Code & Sign In';
             } catch (err) {
-                resetRecaptcha();
-                loginErrorBox.innerHTML = formatFirebaseError(err);
+                console.error("[LOGIN TELEGRAM INITIATE ERROR]", err);
+                loginErrorBox.textContent = err.message || 'Unable to connect to Telegram authentication bot.';
                 loginErrorBox.classList.remove('hidden');
                 loginSubmitBtn.disabled = false;
-                loginSubmitBtn.textContent = '📲 Send SMS OTP to Phone';
+                loginSubmitBtn.textContent = '📲 Get OTP on Telegram';
             }
         }
-        // Step 2: Verify SMS OTP
+        // Step 2: Verify Telegram OTP
         else {
             const otp = loginOtpInput.value.trim();
             if (!otp || otp.length !== 6) {
-                loginErrorBox.textContent = 'Please enter the 6-digit code received on your phone.';
+                loginErrorBox.textContent = 'Please enter the 6-digit verification code from Telegram.';
                 loginErrorBox.classList.remove('hidden');
                 return;
             }
@@ -784,19 +660,12 @@ function setupAuthFormListeners() {
             loginSubmitBtn.textContent = 'Verifying Code...';
 
             try {
-                if (!phoneConfirmationResult) {
-                    throw new Error('No active SMS session. Please click Change Number to request a new code.');
-                }
-
-                const userCredential = await phoneConfirmationResult.confirm(otp);
-                const idToken = await userCredential.user.getIdToken();
-
-                const res = await fetch(`${API_BASE}/api/auth/firebase/verify`, {
+                const res = await fetch(`${API_BASE}/api/auth/telegram/verify`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        id_token: idToken,
-                        flow: 'login',
+                        auth_session_id: currentLoginSessionId,
+                        otp: otp,
                         phone: phone,
                         patient_uid: uid
                     })
@@ -804,7 +673,7 @@ function setupAuthFormListeners() {
 
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
-                    throw new Error(err.detail || 'Verification failed on server.');
+                    throw new Error(err.detail || 'Invalid or expired OTP code. Please tap START in @MedCare_Verify_Auth_bot.');
                 }
 
                 const data = await res.json();
@@ -819,14 +688,8 @@ function setupAuthFormListeners() {
                     showFamilyProfileSelector(data.profiles, data.phone || phone);
                 }
             } catch (err) {
-                console.error("[LOGIN OTP VERIFY ERROR]", err);
-                let errText = err.message || 'Invalid verification code. Please check your SMS and try again.';
-                if (err.code === 'auth/invalid-verification-code') {
-                    errText = 'Incorrect SMS verification code. Please check your phone and try again.';
-                } else if (err.code === 'auth/code-expired') {
-                    errText = 'This SMS verification code has expired. Please click Change Number to request a new code.';
-                }
-                loginErrorBox.textContent = errText;
+                console.error("[LOGIN TELEGRAM VERIFY ERROR]", err);
+                loginErrorBox.textContent = err.message || 'Verification failed. Please check your OTP and try again.';
                 loginErrorBox.classList.remove('hidden');
                 loginSubmitBtn.disabled = false;
                 loginSubmitBtn.textContent = 'Verify Code & Sign In';
@@ -834,7 +697,7 @@ function setupAuthFormListeners() {
         }
     });
 
-    // 3. Register Form (Pure Firebase Phone Auth SMS OTP)
+    // 3. Register Form (Dedicated Telegram Bot OTP Gateway)
     registerForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         registerErrorBox.classList.add('hidden');
@@ -842,66 +705,33 @@ function setupAuthFormListeners() {
         const name = registerNameInput.value.trim();
         const dob = registerDobInput.value.trim();
         const phone = registerPhoneInput.value.trim();
-        const formattedPhone = formatE164(phone);
 
-        // Step 1: Send SMS OTP
+        // Step 1: Initiate Telegram OTP Session
         if (registerOtpGroup.classList.contains('hidden')) {
             registerSubmitBtn.disabled = true;
-            registerSubmitBtn.textContent = 'Sending SMS Code...';
+            registerSubmitBtn.textContent = 'Opening Telegram Gateway...';
 
-            if (!formattedPhone || formattedPhone.length < 10) {
+            if (!name) {
+                registerErrorBox.textContent = 'Please enter your full name.';
+                registerErrorBox.classList.remove('hidden');
+                registerSubmitBtn.disabled = false;
+                registerSubmitBtn.textContent = '📲 Get OTP on Telegram';
+                return;
+            }
+
+            if (!phone || phone.replace(/\D/g, '').length < 10) {
                 registerErrorBox.textContent = 'Please enter a valid 10-digit mobile number.';
                 registerErrorBox.classList.remove('hidden');
                 registerSubmitBtn.disabled = false;
-                registerSubmitBtn.textContent = '📲 Send SMS OTP to Phone';
+                registerSubmitBtn.textContent = '📲 Get OTP on Telegram';
                 return;
             }
 
             try {
-                const appVerifier = getRecaptchaVerifier();
-                registerConfirmationResult = await firebase.auth().signInWithPhoneNumber(formattedPhone, appVerifier);
-                console.log("[FIREBASE] SMS verification code sent for registration to", formattedPhone);
-
-                registerCredentialsGroup.classList.add('hidden');
-                registerOtpGroup.classList.remove('hidden');
-                registerOtpInput.required = true;
-                registerOtpInput.value = '';
-                registerOtpInput.focus();
-                registerSubmitBtn.disabled = false;
-                registerSubmitBtn.textContent = 'Verify Code & Complete Registration';
-            } catch (err) {
-                resetRecaptcha();
-                registerErrorBox.innerHTML = formatFirebaseError(err);
-                registerErrorBox.classList.remove('hidden');
-                registerSubmitBtn.disabled = false;
-                registerSubmitBtn.textContent = '📲 Send SMS OTP to Phone';
-            }
-        }
-        // Step 2: Verify SMS OTP
-        else {
-            const otp = registerOtpInput.value.trim();
-            if (!otp || otp.length !== 6) {
-                registerErrorBox.textContent = 'Please enter the 6-digit code received on your phone.';
-                registerErrorBox.classList.remove('hidden');
-                return;
-            }
-
-            registerSubmitBtn.disabled = true;
-            registerSubmitBtn.textContent = 'Creating Profile...';
-
-            try {
-                if (!registerConfirmationResult) {
-                    throw new Error('No active SMS session. Please click Change Number to request a new code.');
-                }
-
-                const userCredential = await registerConfirmationResult.confirm(otp);
-                const idToken = await userCredential.user.getIdToken();
-
-                const res = await fetch(`${API_BASE}/api/auth/firebase/verify`, {
+                const res = await fetch(`${API_BASE}/api/auth/telegram/initiate`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        id_token: idToken,
                         flow: 'register',
                         name: name,
                         dob: dob,
@@ -911,7 +741,60 @@ function setupAuthFormListeners() {
 
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
-                    throw new Error(err.detail || 'Registration failed on server.');
+                    throw new Error(err.detail || 'Registration failed. Please check your details.');
+                }
+
+                const data = await res.json();
+                currentRegisterSessionId = data.auth_session_id;
+
+                if (registerTelegramLink && data.telegram_url) {
+                    registerTelegramLink.href = data.telegram_url;
+                    window.open(data.telegram_url, '_blank');
+                }
+
+                registerCredentialsGroup.classList.add('hidden');
+                registerOtpGroup.classList.remove('hidden');
+                registerOtpInput.required = true;
+                registerOtpInput.value = '';
+                registerOtpInput.focus();
+                registerSubmitBtn.disabled = false;
+                registerSubmitBtn.textContent = 'Verify Code & Complete Registration';
+            } catch (err) {
+                console.error("[REGISTER TELEGRAM INITIATE ERROR]", err);
+                registerErrorBox.textContent = err.message || 'Unable to connect to Telegram authentication bot.';
+                registerErrorBox.classList.remove('hidden');
+                registerSubmitBtn.disabled = false;
+                registerSubmitBtn.textContent = '📲 Get OTP on Telegram';
+            }
+        }
+        // Step 2: Verify Telegram OTP
+        else {
+            const otp = registerOtpInput.value.trim();
+            if (!otp || otp.length !== 6) {
+                registerErrorBox.textContent = 'Please enter the 6-digit verification code from Telegram.';
+                registerErrorBox.classList.remove('hidden');
+                return;
+            }
+
+            registerSubmitBtn.disabled = true;
+            registerSubmitBtn.textContent = 'Creating Profile...';
+
+            try {
+                const res = await fetch(`${API_BASE}/api/auth/telegram/verify`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        auth_session_id: currentRegisterSessionId,
+                        otp: otp,
+                        name: name,
+                        dob: dob,
+                        phone: phone
+                    })
+                });
+
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || 'Invalid or expired OTP code. Please tap START in @MedCare_Verify_Auth_bot.');
                 }
 
                 const regData = await res.json();
@@ -925,20 +808,14 @@ function setupAuthFormListeners() {
 
                 addMessage(
                     `🎉 **Welcome to MedCare Hospital, ${regData.name}!**\n\n` +
-                    `Your phone number has been verified via SMS OTP and your profile is active.\n\n` +
+                    `Your profile has been created and verified via Telegram.\n\n` +
                     `🔑 **Your Official Patient ID is:** \`${regData.patient_uid}\`\n\n` +
                     `*(You can now book appointments, view doctor availability, and check medical records anytime!)*`,
                     'bot'
                 );
             } catch (err) {
-                console.error("[REGISTER OTP VERIFY ERROR]", err);
-                let errText = err.message || 'Invalid verification code. Please check your SMS and try again.';
-                if (err.code === 'auth/invalid-verification-code') {
-                    errText = 'Incorrect SMS verification code. Please check your phone and try again.';
-                } else if (err.code === 'auth/code-expired') {
-                    errText = 'This SMS verification code has expired. Please click Change Number to request a new code.';
-                }
-                registerErrorBox.textContent = errText;
+                console.error("[REGISTER TELEGRAM VERIFY ERROR]", err);
+                registerErrorBox.textContent = err.message || 'Verification failed. Please check your OTP and try again.';
                 registerErrorBox.classList.remove('hidden');
                 registerSubmitBtn.disabled = false;
                 registerSubmitBtn.textContent = 'Verify Code & Complete Registration';
@@ -954,9 +831,8 @@ function setupAuthFormListeners() {
             loginCredentialsGroup.classList.remove('hidden');
             loginOtpInput.required = false;
             loginSubmitBtn.disabled = false;
-            loginSubmitBtn.textContent = '📲 Send SMS OTP to Phone';
+            loginSubmitBtn.textContent = '📲 Get OTP on Telegram';
             loginErrorBox.classList.add('hidden');
-            resetRecaptcha();
         });
     }
 
@@ -967,9 +843,8 @@ function setupAuthFormListeners() {
             registerCredentialsGroup.classList.remove('hidden');
             registerOtpInput.required = false;
             registerSubmitBtn.disabled = false;
-            registerSubmitBtn.textContent = '📲 Send SMS OTP to Phone';
+            registerSubmitBtn.textContent = '📲 Get OTP on Telegram';
             registerErrorBox.classList.add('hidden');
-            resetRecaptcha();
         });
     }
 }
@@ -1029,7 +904,7 @@ function logoutPatientUI() {
     if (loginOtpGroup) loginOtpGroup.classList.add('hidden');
     if (loginSubmitBtn) {
         loginSubmitBtn.disabled = false;
-        loginSubmitBtn.textContent = '📲 Send SMS OTP to Phone';
+        loginSubmitBtn.textContent = '📲 Get OTP on Telegram';
     }
 }
 

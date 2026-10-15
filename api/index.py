@@ -29,6 +29,8 @@ if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
     os.environ.setdefault("GOOGLE_API_KEY", "AQ.Ab8RN6IIyFKeRnXQGSCxZY49wknN0DpOXqtfDzzTMDJqexHqHg")
     os.environ.setdefault("LLM_PROVIDER", "gemini")
     os.environ.setdefault("LLM_MODEL", "gemini-3.5-flash-lite")
+    os.environ.setdefault("TELEGRAM_BOT_TOKEN", "8662117383:AAHl1cTXSYsrA2jraHSQW7ZWxQJzsfLJm1U")
+    os.environ.setdefault("TELEGRAM_ADMIN_CHAT_ID", "8608906450")
     os.environ.setdefault("TELEGRAM_AUTH_BOT_TOKEN", "8630224222:AAFqjxhqGmkuEbZeoeRLrh7M4A30fDD-4uc")
     os.environ.setdefault("TELEGRAM_AUTH_BOT_USERNAME", "MedCare_Verify_Auth_bot")
 
