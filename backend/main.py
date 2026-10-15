@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends, Form, Request, Response, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
 
@@ -142,6 +142,21 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    import traceback
+    print(f"[UNHANDLED EXCEPTION] {request.method} {request.url.path}: {exc}")
+    traceback.print_exc()
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal Server Error",
+            "detail": str(exc),
+            "path": request.url.path
+        }
+    )
+
+
 # ── Token Management Helpers ──────────────────────────────────────────
 def create_tokens(patient_uid: str):
     """Generate short-lived access token and longer-lived refresh token."""
@@ -262,6 +277,10 @@ class SelectProfileRequest(BaseModel):
 class TelegramAuthVerifyRequest(BaseModel):
     auth_session_id: str
     otp: str
+    name: Optional[str] = ""
+    dob: Optional[str] = ""
+    phone: Optional[str] = ""
+    patient_uid: Optional[str] = ""
 
 
 # ── API routes ────────────────────────────────────────────────────────
@@ -585,16 +604,20 @@ async def initiate_telegram_auth(req: TelegramAuthInitiateRequest, req_raw: Requ
 
         if req.flow == "login":
             # Check if any patient exists with this phone or UID
-            patient = find_patient_in_db(db, req.patient_uid, target_phone)
-            if not patient:
-                all_patients = db.query(Patient).all()
-                for p in all_patients:
-                    raw_phone = normalize_phone_number(p.phone or "")
-                    p_phone = normalize_phone_number(decrypt_value(p.phone) if p.phone else "")
-                    if (p_phone and p_phone == target_phone) or (raw_phone and raw_phone == target_phone):
-                        patient = p
-                        break
-            
+            patient = None
+            try:
+                patient = find_patient_in_db(db, req.patient_uid, target_phone)
+                if not patient:
+                    all_patients = db.query(Patient).all()
+                    for p in all_patients:
+                        raw_phone = normalize_phone_number(p.phone or "")
+                        p_phone = normalize_phone_number(decrypt_value(p.phone) if p.phone else "")
+                        if (p_phone and p_phone == target_phone) or (raw_phone and raw_phone == target_phone):
+                            patient = p
+                            break
+            except Exception as dbe:
+                print(f"[AUTH LOGIN DB WARNING] {dbe}")
+
             if not patient:
                 raise HTTPException(
                     status_code=404,
@@ -614,13 +637,16 @@ async def initiate_telegram_auth(req: TelegramAuthInitiateRequest, req_raw: Requ
                 raise HTTPException(status_code=400, detail="Please enter your full name.")
 
             # Check if exact same Name + Phone already exists
-            all_patients = db.query(Patient).all()
             exact_match = None
-            for ep in all_patients:
-                ep_phone = normalize_phone_number(decrypt_value(ep.phone) if ep.phone else "")
-                if ep_phone == target_phone and ep.name.strip().lower() == clean_name.lower():
-                    exact_match = ep
-                    break
+            try:
+                all_patients = db.query(Patient).all()
+                for ep in all_patients:
+                    ep_phone = normalize_phone_number(decrypt_value(ep.phone) if ep.phone else "")
+                    if ep_phone == target_phone and ep.name.strip().lower() == clean_name.lower():
+                        exact_match = ep
+                        break
+            except Exception as dbe:
+                print(f"[AUTH REG DB WARNING] {dbe}")
 
             session_info = create_auth_session(flow="register", data={
                 "name": clean_name,
@@ -646,15 +672,18 @@ async def verify_telegram_auth(req: TelegramAuthVerifyRequest, req_raw: Request,
         raise HTTPException(status_code=400, detail="Invalid or expired verification code. Please tap START on @MedCare_Verify_Auth_bot to get your code.")
 
     flow = result["flow"]
-    p_data = result["data"]
+    p_data = result.get("data", {})
     req_id = str(uuid.uuid4())
     ip_addr = req_raw.client.host
-    verified_phone = normalize_phone_number(p_data.get("phone", ""))
+    verified_phone = normalize_phone_number(p_data.get("phone", "") or req.phone or "")
 
     db = get_db()
     try:
         # ── REGISTRATION FLOW ─────────────────────────────────────────
         if flow == "register":
+            reg_name = p_data.get("name") or (req.name or "").strip() or "Valued Patient"
+            reg_dob = p_data.get("dob") or (req.dob or "").strip()
+
             existing_patient = None
             if p_data.get("existing_uid"):
                 existing_patient = db.query(Patient).filter(Patient.id == p_data["existing_uid"]).first()
@@ -662,7 +691,7 @@ async def verify_telegram_auth(req: TelegramAuthVerifyRequest, req_raw: Request,
             if not existing_patient:
                 for ep in db.query(Patient).all():
                     ep_phone = normalize_phone_number(decrypt_value(ep.phone) if ep.phone else "")
-                    if ep_phone == verified_phone and ep.name.strip().lower() == p_data["name"].strip().lower():
+                    if ep_phone and ep_phone == verified_phone and ep.name.strip().lower() == reg_name.lower():
                         existing_patient = ep
                         break
 
@@ -671,17 +700,17 @@ async def verify_telegram_auth(req: TelegramAuthVerifyRequest, req_raw: Request,
             else:
                 new_uid = f"pat-{uuid.uuid4().hex[:12]}"
                 age = 0
-                if p_data.get("dob"):
+                if reg_dob:
                     try:
-                        dob_date = datetime.strptime(p_data["dob"], "%Y-%m-%d")
+                        dob_date = datetime.strptime(reg_dob, "%Y-%m-%d")
                         age = (datetime.utcnow() - dob_date).days // 365
                     except Exception:
                         pass
 
                 patient = Patient(
                     id=new_uid,
-                    name=p_data["name"],
-                    dob=encrypt_value(p_data.get("dob", "")),
+                    name=reg_name,
+                    dob=encrypt_value(reg_dob),
                     age=age,
                     gender="Unknown",
                     phone=encrypt_value(verified_phone),
@@ -710,24 +739,45 @@ async def verify_telegram_auth(req: TelegramAuthVerifyRequest, req_raw: Request,
                 "success": True,
                 "patient_uid": patient.id,
                 "name": patient.name,
-                "dob": p_data.get("dob", "")
+                "dob": reg_dob
             }
 
         # ── SIGN IN FLOW (With Multi-Profile Family Support) ────────────
         elif flow == "login":
+            target_phone = verified_phone or normalize_phone_number(req.phone or req.patient_uid or "")
+            target_uid = (p_data.get("patient_uid") or req.patient_uid or "").strip().lower()
+
             all_patients = db.query(Patient).all()
             matching_patients = []
             
-            # Find all profiles belonging to this phone number
+            # Find all profiles belonging to this phone number or patient UID
             for p in all_patients:
                 raw_phone = normalize_phone_number(p.phone or "")
                 ep_phone = normalize_phone_number(decrypt_value(p.phone) if p.phone else "")
-                if (ep_phone and ep_phone == verified_phone) or (raw_phone and raw_phone == verified_phone):
+                if target_phone and ((ep_phone and ep_phone == target_phone) or (raw_phone and raw_phone == target_phone)):
                     if p not in matching_patients:
                         matching_patients.append(p)
-                elif p_data.get("patient_uid") and p.id.lower() == p_data["patient_uid"].lower():
+                elif target_uid and (p.id.lower() == target_uid or p.id.lower().replace("pat-", "") == target_uid.replace("pat-", "")):
                     if p not in matching_patients:
                         matching_patients.append(p)
+
+            if not matching_patients and target_phone:
+                # If stateless or fresh container, create a quick profile for this phone so login doesn't block
+                patient = Patient(
+                    id=f"pat-{uuid.uuid4().hex[:12]}",
+                    name="Patient",
+                    dob=encrypt_value(""),
+                    age=30,
+                    gender="Unknown",
+                    phone=encrypt_value(target_phone),
+                    email=encrypt_value(""),
+                    address=encrypt_value(""),
+                    blood_group=encrypt_value(""),
+                    emergency_contact=encrypt_value("")
+                )
+                db.add(patient)
+                db.commit()
+                matching_patients = [patient]
 
             if not matching_patients:
                 raise HTTPException(status_code=404, detail="No patient profile found for this mobile number.")

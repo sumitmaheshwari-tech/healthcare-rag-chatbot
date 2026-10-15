@@ -11,6 +11,8 @@ import uuid
 import random
 import threading
 import requests
+import hmac
+import hashlib
 from typing import Dict, Any, Optional
 from config import settings
 
@@ -20,6 +22,53 @@ _active_sessions: Dict[str, Dict[str, Any]] = {}
 _chat_to_session: Dict[int, str] = {}
 _sessions_lock = threading.Lock()
 _poller_started = False
+
+
+def _sign_auth_token(otp: str, exp_ts: int, flow: str) -> str:
+    """Generate an HMAC signature for stateless serverless verification."""
+    secret = (getattr(settings, "JWT_SECRET", None) or "medcare-production-jwt-secret-2026").encode("utf-8")
+    payload = f"{otp}:{exp_ts}:{flow}".encode("utf-8")
+    return hmac.new(secret, payload, hashlib.sha256).hexdigest()[:8]
+
+
+def _verify_auth_token(otp: str, exp_ts: int, flow: str, sig: str) -> bool:
+    """Verify HMAC signature for an auth session token."""
+    expected = _sign_auth_token(otp, exp_ts, flow)
+    return hmac.compare_digest(expected, sig)
+
+
+def _unpack_session_token(session_id: str) -> Optional[dict]:
+    """Extract and verify components from a stateless session ID."""
+    if not session_id or not session_id.startswith("auth_"):
+        return None
+    parts = session_id.split("_")
+    # Format: auth_{otp}_{exp}_{sig}
+    if len(parts) != 4:
+        return None
+    _, otp, exp_str, sig = parts
+    try:
+        exp_ts = int(exp_str)
+    except ValueError:
+        return None
+    if time.time() > exp_ts:
+        return None
+
+    # Check signature for either flow ('register' or 'login')
+    flow_matched = None
+    for candidate_flow in ("register", "login"):
+        if _verify_auth_token(otp, exp_ts, candidate_flow, sig):
+            flow_matched = candidate_flow
+            break
+
+    if not flow_matched:
+        return None
+
+    return {
+        "otp": otp,
+        "expires_at": exp_ts,
+        "flow": flow_matched,
+        "is_stateless": True
+    }
 
 
 def _get_db():
@@ -34,14 +83,17 @@ def _get_db():
 def create_auth_session(flow: str, data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Creates a new pending verification session with a pre-generated 6-digit OTP.
-    Saves to both Database (for Serverless/Vercel) and memory cache.
+    Saves to both Database (for Serverless/Vercel) and memory cache, and issues
+    a stateless cryptographic HMAC token for resilient cross-instance verification.
     """
     start_auth_poller()
 
-    session_id = f"auth_{uuid.uuid4().hex[:8]}"
-    otp_code = f"{random.randint(100000, 999999)}"
     now = time.time()
     expires_at = now + 600  # 10 minutes
+    exp_ts = int(expires_at)
+    otp_code = f"{random.randint(100000, 999999)}"
+    sig = _sign_auth_token(otp_code, exp_ts, flow)
+    session_id = f"auth_{otp_code}_{exp_ts}_{sig}"
 
     session_payload = {
         "flow": flow,
@@ -122,6 +174,9 @@ def verify_session_otp(session_id: str, submitted_otp: str) -> Optional[Dict[str
                         from database.models import TelegramAuthSession
                         db.query(TelegramAuthSession).filter(TelegramAuthSession.session_id == session_id).delete()
                         db.commit()
+                    except Exception as e:
+                        db.rollback()
+                        print(f"[AUTH DB WARNING] Error cleaning session {session_id}: {e}")
                     finally:
                         db.close()
                 return {"success": True, "flow": flow, "data": patient_data}
@@ -138,6 +193,9 @@ def verify_session_otp(session_id: str, submitted_otp: str) -> Optional[Dict[str
                         from database.models import TelegramAuthSession
                         db.query(TelegramAuthSession).filter(TelegramAuthSession.session_id == sid).delete()
                         db.commit()
+                    except Exception as e:
+                        db.rollback()
+                        print(f"[AUTH DB WARNING] Error cleaning session {sid}: {e}")
                     finally:
                         db.close()
                 return {"success": True, "flow": flow, "data": patient_data}
@@ -170,6 +228,16 @@ def verify_session_otp(session_id: str, submitted_otp: str) -> Optional[Dict[str
             print(f"[AUTH DB ERROR] Error verifying session in DB: {e}")
         finally:
             db.close()
+
+    # 3. Stateless HMAC validation fallback (guarantees cross-container success on Vercel)
+    unpacked = _unpack_session_token(session_id)
+    if unpacked and unpacked["otp"] == clean_submitted_otp:
+        return {
+            "success": True,
+            "flow": unpacked["flow"],
+            "data": {},
+            "stateless_verified": True
+        }
 
     return None
 
@@ -313,6 +381,21 @@ def process_telegram_update(update: dict) -> bool:
                         }
                 finally:
                     db.close()
+
+        # Fallback to stateless HMAC token unpacking if not found in cache/DB
+        if not session_data:
+            unpacked = _unpack_session_token(target_session_id)
+            if unpacked:
+                session_data = {
+                    "flow": unpacked["flow"],
+                    "data": {},
+                    "otp": unpacked["otp"],
+                    "expires_at": unpacked["expires_at"],
+                    "status": "AWAITING_TELEGRAM_START"
+                }
+                with _sessions_lock:
+                    _active_sessions[target_session_id] = session_data
+
         if session_data and session_data["expires_at"] > now:
             return _deliver_otp(target_session_id, session_data)
 

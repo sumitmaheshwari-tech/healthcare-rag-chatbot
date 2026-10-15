@@ -671,7 +671,9 @@ function setupAuthFormListeners() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         auth_session_id: currentLoginSessionId,
-                        otp: otp
+                        otp: otp,
+                        phone: phone,
+                        patient_uid: uid
                     })
                 });
 
@@ -760,7 +762,10 @@ function setupAuthFormListeners() {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         auth_session_id: currentRegisterSessionId,
-                        otp: otp
+                        otp: otp,
+                        name: name,
+                        dob: dob,
+                        phone: phone
                     })
                 });
 

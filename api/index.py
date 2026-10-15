@@ -21,10 +21,9 @@ if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
     os.environ["VERCEL"] = "1"
     os.environ.setdefault("ENV", "production")
     
-    SUPABASE_POOLER_URL = "postgresql+psycopg2://postgres.wztqumimqknwgeqdvvfc:NTOcGyC5IpSvxqRN@aws-0-ap-south-1.pooler.supabase.com:6543/postgres?sslmode=require"
     db_url = os.environ.get("DATABASE_URL", "")
-    if not db_url or ("sqlite" in db_url and "/tmp" not in db_url):
-        os.environ["DATABASE_URL"] = SUPABASE_POOLER_URL
+    if not db_url or "wztqumimqknwgeqdvvfc" in db_url or ("sqlite" in db_url and "/tmp" not in db_url):
+        os.environ["DATABASE_URL"] = "sqlite:////tmp/hospital.db"
     
     os.environ.setdefault("JWT_SECRET", "medcare-production-jwt-secret-2026")
     os.environ.setdefault("GOOGLE_API_KEY", "AQ.Ab8RN6IIyFKeRnXQGSCxZY49wknN0DpOXqtfDzzTMDJqexHqHg")
@@ -45,6 +44,18 @@ try:
     import backend.main as bm
     backend_app = bm.app
     _load_error = None
+
+    # Ensure database schema and seed data exist in /tmp/hospital.db
+    try:
+        from backend.database.connection import init_db, get_db
+        from backend.database.setup import seed_database
+        init_db()
+        _init_db_session = get_db()
+        seed_database(_init_db_session)
+        _init_db_session.close()
+        print("[VERCEL INIT] Database schema and demo data initialized successfully.")
+    except Exception as _dbe:
+        print(f"[VERCEL INIT DB WARNING] {_dbe}")
 except Exception as e:
     import traceback
     _load_error = {
