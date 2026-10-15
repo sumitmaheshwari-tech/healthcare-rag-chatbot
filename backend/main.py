@@ -265,7 +265,7 @@ class OTPVerifyRequest(BaseModel):
 class TelegramAuthInitiateRequest(BaseModel):
     flow: str  # "register" or "login"
     name: Optional[str] = ""
-    dob: str
+    dob: Optional[str] = ""
     phone: str
     patient_uid: Optional[str] = ""
 
