@@ -33,22 +33,6 @@ let recaptchaVerifier = null;
 let phoneConfirmationResult = null;
 let registerConfirmationResult = null;
 
-function getRecaptchaVerifier() {
-    if (!recaptchaVerifier && typeof firebase !== 'undefined') {
-        recaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', {
-            size: 'invisible',
-            callback: () => {
-                // reCAPTCHA solved
-            },
-            'expired-callback': () => {
-                console.warn("[RECAPTCHA] Expired, resetting");
-                resetRecaptcha();
-            }
-        });
-    }
-    return recaptchaVerifier;
-}
-
 function resetRecaptcha() {
     if (recaptchaVerifier) {
         try {
@@ -56,6 +40,38 @@ function resetRecaptcha() {
         } catch (e) {}
         recaptchaVerifier = null;
     }
+    // Fully replace DOM container node so Google reCAPTCHA never throws "already rendered in this element"
+    const oldContainer = document.getElementById('recaptcha-container');
+    if (oldContainer && oldContainer.parentNode) {
+        const newContainer = document.createElement('div');
+        newContainer.id = 'recaptcha-container';
+        oldContainer.parentNode.replaceChild(newContainer, oldContainer);
+    }
+}
+
+function getRecaptchaVerifier() {
+    if (typeof firebase === 'undefined') return null;
+
+    if (!recaptchaVerifier) {
+        let container = document.getElementById('recaptcha-container');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'recaptcha-container';
+            document.body.appendChild(container);
+        } else {
+            container.innerHTML = '';
+        }
+
+        recaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', {
+            size: 'invisible',
+            callback: () => {},
+            'expired-callback': () => {
+                console.warn("[RECAPTCHA] Expired, resetting");
+                resetRecaptcha();
+            }
+        });
+    }
+    return recaptchaVerifier;
 }
 
 function formatE164(phone) {
@@ -644,6 +660,35 @@ function setupAuthFormListeners() {
         const msg = (err && err.message) ? err.message : '';
         const code = (err && err.code) ? err.code : '';
 
+        // 1. Firebase Cloud Billing required for real physical SMS on Spark plan
+        if (code === 'auth/billing-not-enabled' ||
+            msg.toLowerCase().includes('bill') ||
+            msg.toLowerCase().includes('billing')) {
+            return `
+                <div style="text-align:left;line-height:1.45;padding:6px 2px;">
+                    <div style="font-weight:700;color:#dc2626;margin-bottom:6px;">
+                        <i class="fas fa-credit-card"></i> Firebase Cloud Billing Required for Cellular SMS
+                    </div>
+                    <p style="margin:0 0 6px 0;font-size:0.83rem;color:#374151;">
+                        Google requires an active Cloud Billing account (Blaze plan) to send real physical SMS to mobile carriers.
+                    </p>
+                    <div style="background:#f0fdf4;border:1px solid #bbf7d0;padding:8px 10px;border-radius:6px;font-size:0.82rem;color:#166534;margin-bottom:8px;">
+                        <strong>✨ Test Free Now Without a Credit Card:</strong>
+                        <ol style="margin:4px 0 0 16px;padding:0;font-size:0.80rem;">
+                            <li>Go to <a href="https://console.firebase.google.com/project/medcare-5d8d1/authentication/providers" target="_blank" rel="noopener noreferrer" style="color:#15803d;text-decoration:underline;font-weight:600;">Firebase Console &rarr; Sign-in method &rarr; Phone</a></li>
+                            <li>Scroll to <b>Phone numbers for testing (optional)</b></li>
+                            <li>Add your number: <code>+91 7037100608</code> and code: <code>123456</code></li>
+                            <li>Click <b>Save</b> &mdash; you can verify immediately with code <code>123456</code>!</li>
+                        </ol>
+                    </div>
+                    <p style="margin:0;font-size:0.77rem;color:#6b7280;">
+                        Or upgrade your Firebase project to Blaze (pay-as-you-go) to send real SMS (10,000 free SMS/mo).
+                    </p>
+                </div>
+            `;
+        }
+
+        // 2. SMS Region Policy
         if (code === 'auth/sms-region-not-supported' ||
             msg.toLowerCase().includes('region') ||
             msg.toLowerCase().includes('not enabled') ||
