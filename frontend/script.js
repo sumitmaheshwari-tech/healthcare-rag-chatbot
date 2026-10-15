@@ -76,10 +76,10 @@ let logoutBtn;
 let authOverlay, loginCard, registerCard;
 let loginForm, registerForm;
 let loginUidInput, loginDobInput, loginPhoneInput, loginErrorBox, loginSubmitBtn;
-let loginCredentialsGroup, loginOtpGroup, loginOtpInput, loginTelegramLink, loginBackBtn;
+let loginCredentialsGroup, loginOtpGroup, loginOtpInput, loginBackBtn;
 
 let registerNameInput, registerDobInput, registerPhoneInput, registerErrorBox, registerSubmitBtn;
-let registerCredentialsGroup, registerOtpGroup, registerOtpInput, registerTelegramLink, registerBackBtn;
+let registerCredentialsGroup, registerOtpGroup, registerOtpInput, registerBackBtn;
 let registerDirectBtn, registerSkipOtpBtn, loginSkipToRegisterBtn;
 
 let switchToRegisterLink, switchToLoginLink;
@@ -87,8 +87,6 @@ let profileSelectCard, profileListContainer, addFamilyMemberBtn, switchBackToLog
 let lastVerifiedPhone = '';
 let chatInputContainer;
 
-let currentLoginSessionId = '';
-let currentRegisterSessionId = '';
 
 // ── Initialisation ───────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
@@ -119,7 +117,6 @@ document.addEventListener('DOMContentLoaded', () => {
     loginCredentialsGroup = document.getElementById('login-credentials-group');
     loginOtpGroup       = document.getElementById('login-otp-group');
     loginOtpInput       = document.getElementById('login-otp');
-    loginTelegramLink   = document.getElementById('login-telegram-link');
     loginBackBtn        = document.getElementById('login-back-btn');
     
     registerNameInput   = document.getElementById('register-name');
@@ -130,7 +127,6 @@ document.addEventListener('DOMContentLoaded', () => {
     registerCredentialsGroup = document.getElementById('register-credentials-group');
     registerOtpGroup    = document.getElementById('register-otp-group');
     registerOtpInput    = document.getElementById('register-otp');
-    registerTelegramLink = document.getElementById('register-telegram-link');
     registerBackBtn     = document.getElementById('register-back-btn');
     registerDirectBtn   = document.getElementById('register-direct-btn');
     registerSkipOtpBtn  = document.getElementById('register-skip-otp-btn');
@@ -642,7 +638,52 @@ function setupAuthFormListeners() {
         });
     }
 
-    // 2. Sign In Form (Mobile Phone -> Firebase SMS OTP with Telegram backup)
+    // Helper to format Firebase Phone Auth errors with guidance
+    function formatFirebaseError(err) {
+        console.error("[FIREBASE AUTH ERROR]", err);
+        const msg = (err && err.message) ? err.message : '';
+        const code = (err && err.code) ? err.code : '';
+
+        if (code === 'auth/sms-region-not-supported' ||
+            msg.toLowerCase().includes('region') ||
+            msg.toLowerCase().includes('not enabled') ||
+            code === 'auth/operation-not-allowed') {
+            return `
+                <div style="text-align:left;line-height:1.45;padding:4px 0;">
+                    <div style="font-weight:700;color:#dc2626;margin-bottom:6px;">
+                        <i class="fas fa-globe-asia"></i> SMS Not Enabled for India (+91)
+                    </div>
+                    <p style="margin:0 0 6px 0;font-size:0.83rem;color:#374151;">
+                        Firebase requires enabling the <b>SMS Region Policy</b> for India in your console:
+                    </p>
+                    <ol style="margin:0 0 8px 18px;padding:0;font-size:0.82rem;color:#1f2937;">
+                        <li>Open <a href="https://console.firebase.google.com/project/medcare-5d8d1/authentication/settings" target="_blank" rel="noopener noreferrer" style="color:#2563eb;text-decoration:underline;font-weight:600;">Firebase Console &rarr; SMS Settings</a></li>
+                        <li>Under <b>SMS region policy</b>, select <b>Allow</b> &amp; check <b>India (+91)</b></li>
+                        <li>Click <b>Save</b></li>
+                    </ol>
+                    <div style="background:#eff6ff;border:1px solid #bfdbfe;padding:6px 8px;border-radius:6px;font-size:0.78rem;color:#1e40af;margin-top:6px;">
+                        💡 <b>Tip for Instant Testing:</b> In Firebase Console &rarr; <i>Sign-in method</i> &rarr; <i>Phone</i> &rarr; <i>Phone numbers for testing</i>, add a test number (e.g. <code>+91 9999999999</code> with code <code>123456</code>) to test instantly with zero wait!
+                    </div>
+                </div>
+            `;
+        }
+
+        if (code === 'auth/invalid-phone-number') {
+            return 'Please enter a valid 10-digit mobile number.';
+        }
+        if (code === 'auth/quota-exceeded') {
+            return 'Firebase SMS quota exceeded for today. Please try again tomorrow or use a configured test phone number.';
+        }
+        if (code === 'auth/too-many-requests') {
+            return 'Too many SMS requests from this device. Please wait a few minutes before trying again.';
+        }
+        if (code === 'auth/captcha-check-failed') {
+            return 'Security reCAPTCHA verification failed. Please tap Send SMS again.';
+        }
+        return msg || 'Failed to send SMS OTP. Please check your network and mobile number.';
+    }
+
+    // 2. Sign In Form (Pure Firebase Phone Auth SMS OTP)
     loginForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         loginErrorBox.classList.add('hidden');
@@ -666,27 +707,6 @@ function setupAuthFormListeners() {
             }
 
             try {
-                // Secondary Telegram initiate in background (non-blocking)
-                fetch(`${API_BASE}/api/auth/telegram/initiate`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        flow: 'login',
-                        patient_uid: uid,
-                        dob: dob,
-                        phone: phone
-                    })
-                }).then(async r => {
-                    if (r.ok) {
-                        const d = await r.json();
-                        currentLoginSessionId = d.auth_session_id;
-                        if (loginTelegramLink && d.telegram_url) {
-                            loginTelegramLink.href = d.telegram_url;
-                        }
-                    }
-                }).catch(() => {});
-
-                // Firebase Phone Auth
                 const appVerifier = getRecaptchaVerifier();
                 phoneConfirmationResult = await firebase.auth().signInWithPhoneNumber(formattedPhone, appVerifier);
                 console.log("[FIREBASE] SMS verification code sent to", formattedPhone);
@@ -699,25 +719,14 @@ function setupAuthFormListeners() {
                 loginSubmitBtn.disabled = false;
                 loginSubmitBtn.textContent = 'Verify Code & Sign In';
             } catch (err) {
-                console.error("[FIREBASE PHONE AUTH ERROR]", err);
                 resetRecaptcha();
-
-                let errorMsg = err.message || 'Failed to send SMS OTP. Please check your number.';
-                if (err.code === 'auth/invalid-phone-number') {
-                    errorMsg = 'Invalid phone number format. Please enter a valid 10-digit mobile number.';
-                } else if (err.code === 'auth/quota-exceeded') {
-                    errorMsg = 'Daily SMS limit reached. You can still use the Telegram bot link below!';
-                } else if (err.code === 'auth/too-many-requests') {
-                    errorMsg = 'Too many requests. Please wait a moment before trying again.';
-                }
-
-                loginErrorBox.textContent = errorMsg;
+                loginErrorBox.innerHTML = formatFirebaseError(err);
                 loginErrorBox.classList.remove('hidden');
                 loginSubmitBtn.disabled = false;
                 loginSubmitBtn.textContent = '📲 Send SMS OTP to Phone';
             }
         }
-        // Step 2: Verify SMS OTP (or Telegram fallback)
+        // Step 2: Verify SMS OTP
         else {
             const otp = loginOtpInput.value.trim();
             if (!otp || otp.length !== 6) {
@@ -729,93 +738,58 @@ function setupAuthFormListeners() {
             loginSubmitBtn.disabled = true;
             loginSubmitBtn.textContent = 'Verifying Code...';
 
-            let verified = false;
-
-            // 1. Try Firebase Confirmation
-            if (phoneConfirmationResult) {
-                try {
-                    const userCredential = await phoneConfirmationResult.confirm(otp);
-                    const idToken = await userCredential.user.getIdToken();
-
-                    const res = await fetch(`${API_BASE}/api/auth/firebase/verify`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            id_token: idToken,
-                            flow: 'login',
-                            phone: phone,
-                            patient_uid: uid
-                        })
-                    });
-
-                    if (!res.ok) {
-                        const err = await res.json().catch(() => ({}));
-                        throw new Error(err.detail || 'Verification failed on server.');
-                    }
-
-                    const data = await res.json();
-                    verified = true;
-                    lastVerifiedPhone = phone;
-
-                    if (!data.multiple_profiles) {
-                        loginPatient({
-                            patient_uid: data.patient_uid,
-                            name: data.name
-                        });
-                    } else {
-                        showFamilyProfileSelector(data.profiles, data.phone || phone);
-                    }
-                    return;
-                } catch (fbErr) {
-                    console.warn("[AUTH] Firebase verification failed, checking Telegram fallback:", fbErr);
+            try {
+                if (!phoneConfirmationResult) {
+                    throw new Error('No active SMS session. Please click Change Number to request a new code.');
                 }
-            }
 
-            // 2. Try Telegram fallback
-            if (!verified && currentLoginSessionId) {
-                try {
-                    const res = await fetch(`${API_BASE}/api/auth/telegram/verify`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            auth_session_id: currentLoginSessionId,
-                            otp: otp,
-                            phone: phone,
-                            patient_uid: uid
-                        })
-                    });
+                const userCredential = await phoneConfirmationResult.confirm(otp);
+                const idToken = await userCredential.user.getIdToken();
 
-                    if (!res.ok) {
-                        const err = await res.json().catch(() => ({}));
-                        throw new Error(err.detail || 'Invalid or expired OTP code.');
-                    }
+                const res = await fetch(`${API_BASE}/api/auth/firebase/verify`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id_token: idToken,
+                        flow: 'login',
+                        phone: phone,
+                        patient_uid: uid
+                    })
+                });
 
-                    const data = await res.json();
-                    verified = true;
-                    lastVerifiedPhone = phone;
-
-                    if (!data.multiple_profiles) {
-                        loginPatient({
-                            patient_uid: data.patient_uid,
-                            name: data.name
-                        });
-                    } else {
-                        showFamilyProfileSelector(data.profiles, data.phone || phone);
-                    }
-                    return;
-                } catch (tgErr) {
-                    console.warn("[AUTH] Telegram fallback failed:", tgErr);
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || 'Verification failed on server.');
                 }
-            }
 
-            loginErrorBox.textContent = 'Invalid or expired verification code. Please check your SMS and try again.';
-            loginErrorBox.classList.remove('hidden');
-            loginSubmitBtn.disabled = false;
-            loginSubmitBtn.textContent = 'Verify Code & Sign In';
+                const data = await res.json();
+                lastVerifiedPhone = phone;
+
+                if (!data.multiple_profiles) {
+                    loginPatient({
+                        patient_uid: data.patient_uid,
+                        name: data.name
+                    });
+                } else {
+                    showFamilyProfileSelector(data.profiles, data.phone || phone);
+                }
+            } catch (err) {
+                console.error("[LOGIN OTP VERIFY ERROR]", err);
+                let errText = err.message || 'Invalid verification code. Please check your SMS and try again.';
+                if (err.code === 'auth/invalid-verification-code') {
+                    errText = 'Incorrect SMS verification code. Please check your phone and try again.';
+                } else if (err.code === 'auth/code-expired') {
+                    errText = 'This SMS verification code has expired. Please click Change Number to request a new code.';
+                }
+                loginErrorBox.textContent = errText;
+                loginErrorBox.classList.remove('hidden');
+                loginSubmitBtn.disabled = false;
+                loginSubmitBtn.textContent = 'Verify Code & Sign In';
+            }
         }
     });
 
-    // 3. Register Form (Name + DOB + Mobile Phone -> Firebase SMS OTP)
+    // 3. Register Form (Pure Firebase Phone Auth SMS OTP)
     registerForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         registerErrorBox.classList.add('hidden');
@@ -839,27 +813,6 @@ function setupAuthFormListeners() {
             }
 
             try {
-                // Secondary Telegram initiate in background (non-blocking)
-                fetch(`${API_BASE}/api/auth/telegram/initiate`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        flow: 'register',
-                        name: name,
-                        dob: dob,
-                        phone: phone
-                    })
-                }).then(async r => {
-                    if (r.ok) {
-                        const d = await r.json();
-                        currentRegisterSessionId = d.auth_session_id;
-                        if (registerTelegramLink && d.telegram_url) {
-                            registerTelegramLink.href = d.telegram_url;
-                        }
-                    }
-                }).catch(() => {});
-
-                // Firebase Phone Auth
                 const appVerifier = getRecaptchaVerifier();
                 registerConfirmationResult = await firebase.auth().signInWithPhoneNumber(formattedPhone, appVerifier);
                 console.log("[FIREBASE] SMS verification code sent for registration to", formattedPhone);
@@ -872,24 +825,14 @@ function setupAuthFormListeners() {
                 registerSubmitBtn.disabled = false;
                 registerSubmitBtn.textContent = 'Verify Code & Complete Registration';
             } catch (err) {
-                console.error("[FIREBASE REGISTER ERROR]", err);
                 resetRecaptcha();
-
-                let errorMsg = err.message || 'Failed to send SMS OTP. Please check your number.';
-                if (err.code === 'auth/invalid-phone-number') {
-                    errorMsg = 'Invalid phone number format. Please enter a valid 10-digit mobile number.';
-                } else if (err.code === 'auth/quota-exceeded') {
-                    errorMsg = 'Daily SMS limit reached. You can still use the Telegram bot link below!';
-                } else if (err.code === 'auth/too-many-requests') {
-                    errorMsg = 'Too many requests. Please wait a moment before trying again.';
-                }
-
-                registerErrorBox.textContent = errorMsg;
+                registerErrorBox.innerHTML = formatFirebaseError(err);
                 registerErrorBox.classList.remove('hidden');
                 registerSubmitBtn.disabled = false;
                 registerSubmitBtn.textContent = '📲 Send SMS OTP to Phone';
             }
         }
+        // Step 2: Verify SMS OTP
         else {
             const otp = registerOtpInput.value.trim();
             if (!otp || otp.length !== 6) {
@@ -901,101 +844,60 @@ function setupAuthFormListeners() {
             registerSubmitBtn.disabled = true;
             registerSubmitBtn.textContent = 'Creating Profile...';
 
-            let registered = false;
-
-            // 1. Try Firebase Confirmation first
-            if (registerConfirmationResult) {
-                try {
-                    const userCredential = await registerConfirmationResult.confirm(otp);
-                    const idToken = await userCredential.user.getIdToken();
-
-                    const res = await fetch(`${API_BASE}/api/auth/firebase/verify`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            id_token: idToken,
-                            flow: 'register',
-                            name: name,
-                            dob: dob,
-                            phone: phone
-                        })
-                    });
-
-                    if (!res.ok) {
-                        const err = await res.json().catch(() => ({}));
-                        throw new Error(err.detail || 'Registration failed on server.');
-                    }
-
-                    const regData = await res.json();
-                    registered = true;
-                    lastVerifiedPhone = phone;
-
-                    loginPatient({
-                        patient_uid: regData.patient_uid,
-                        name: regData.name,
-                        dob: regData.dob
-                    });
-
-                    addMessage(
-                        `🎉 **Welcome to MedCare Hospital, ${regData.name}!**\n\n` +
-                        `Your identity has been verified via SMS OTP and your profile is active.\n\n` +
-                        `🔑 **Your Official Patient ID is:** \`${regData.patient_uid}\`\n\n` +
-                        `*(You can now book appointments, view doctor availability, and check medical records anytime!)*`,
-                        'bot'
-                    );
-                    return;
-                } catch (fbErr) {
-                    console.warn('[AUTH] Firebase registration verification failed, checking Telegram fallback:', fbErr);
+            try {
+                if (!registerConfirmationResult) {
+                    throw new Error('No active SMS session. Please click Change Number to request a new code.');
                 }
-            }
 
-            // 2. Try Telegram fallback
-            if (!registered && currentRegisterSessionId) {
-                try {
-                    const res = await fetch(`${API_BASE}/api/auth/telegram/verify`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            auth_session_id: currentRegisterSessionId,
-                            otp: otp,
-                            name: name,
-                            dob: dob,
-                            phone: phone
-                        })
-                    });
+                const userCredential = await registerConfirmationResult.confirm(otp);
+                const idToken = await userCredential.user.getIdToken();
 
-                    if (!res.ok) {
-                        const err = await res.json().catch(() => ({}));
-                        throw new Error(err.detail || 'Invalid or expired OTP code.');
-                    }
+                const res = await fetch(`${API_BASE}/api/auth/firebase/verify`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id_token: idToken,
+                        flow: 'register',
+                        name: name,
+                        dob: dob,
+                        phone: phone
+                    })
+                });
 
-                    const regData = await res.json();
-                    registered = true;
-                    lastVerifiedPhone = phone;
-
-                    loginPatient({
-                        patient_uid: regData.patient_uid,
-                        name: regData.name,
-                        dob: regData.dob
-                    });
-
-                    addMessage(
-                        `🎉 **Welcome to MedCare Hospital, ${regData.name}!**\n\n` +
-                        `Your identity has been verified via Telegram and your profile is active.\n\n` +
-                        `🔑 **Your Official Patient ID is:** \`${regData.patient_uid}\`\n\n` +
-                        `*(You can now book appointments, view doctor availability, and check medical records anytime!)*`,
-                        'bot'
-                    );
-                    return;
-                } catch (tgErr) {
-                    console.warn('[AUTH] Telegram fallback failed:', tgErr);
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || 'Registration failed on server.');
                 }
-            }
 
-            registerErrorBox.textContent = 'Invalid or expired verification code. Please check your SMS and try again.';
-            registerErrorBox.classList.remove('hidden');
-            registerSubmitBtn.disabled = false;
-            registerSubmitBtn.textContent = 'Verify Code & Complete Registration';
+                const regData = await res.json();
+                lastVerifiedPhone = phone;
+
+                loginPatient({
+                    patient_uid: regData.patient_uid,
+                    name: regData.name,
+                    dob: regData.dob
+                });
+
+                addMessage(
+                    `🎉 **Welcome to MedCare Hospital, ${regData.name}!**\n\n` +
+                    `Your phone number has been verified via SMS OTP and your profile is active.\n\n` +
+                    `🔑 **Your Official Patient ID is:** \`${regData.patient_uid}\`\n\n` +
+                    `*(You can now book appointments, view doctor availability, and check medical records anytime!)*`,
+                    'bot'
+                );
+            } catch (err) {
+                console.error("[REGISTER OTP VERIFY ERROR]", err);
+                let errText = err.message || 'Invalid verification code. Please check your SMS and try again.';
+                if (err.code === 'auth/invalid-verification-code') {
+                    errText = 'Incorrect SMS verification code. Please check your phone and try again.';
+                } else if (err.code === 'auth/code-expired') {
+                    errText = 'This SMS verification code has expired. Please click Change Number to request a new code.';
+                }
+                registerErrorBox.textContent = errText;
+                registerErrorBox.classList.remove('hidden');
+                registerSubmitBtn.disabled = false;
+                registerSubmitBtn.textContent = 'Verify Code & Complete Registration';
+            }
         }
     });
 
