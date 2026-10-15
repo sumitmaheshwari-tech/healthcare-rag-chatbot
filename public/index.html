@@ -17,6 +17,10 @@
 
     <!-- Custom Light Stylesheet with Cache Buster -->
     <link rel="stylesheet" href="/static/style.css?v=3.0">
+
+    <!-- Google Firebase SDK for Phone Auth SMS OTP -->
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
 </head>
 <body>
     <!-- Calming Background Flows -->
@@ -91,28 +95,31 @@
                             </div>
                         </div>
 
-                        <!-- Step 2: Telegram OTP Verification -->
+                        <!-- Step 2: SMS OTP Verification -->
                         <div id="login-otp-group" class="auth-input-group hidden">
-                            <div class="telegram-step-box">
-                                <strong><i class="fab fa-telegram" style="color: #0088cc;"></i> Step 1:</strong> Tap below to open our official bot and receive your security code directly in Telegram:
+                            <div class="sms-step-box" style="background:#f0fdf4;border:1px solid #bbf7d0;padding:12px;border-radius:8px;margin-bottom:12px;color:#166534;font-size:0.88rem;">
+                                <i class="fas fa-sms" style="color: #16a34a;margin-right:6px;"></i>
+                                A 6-digit SMS verification code has been dispatched to your mobile phone.
                             </div>
-                            <a id="login-telegram-link" href="https://t.me/MedCare_Verify_Auth_bot" target="_blank" rel="noopener noreferrer" class="telegram-open-btn">
-                                <i class="fab fa-telegram-plane"></i> Tap to Open @MedCare_Verify_Auth_bot
-                            </a>
-                            <label for="login-otp" style="margin-top: 6px;">Enter 6-Digit Telegram Code</label>
+                            <label for="login-otp" style="margin-top: 6px;">Enter 6-Digit SMS Code</label>
                             <input type="text" id="login-otp" class="otp-input-field" maxlength="6" placeholder="• • • • • •" pattern="\d{6}">
                             <div class="otp-actions">
                                 <span class="otp-hint-text" style="font-size: 0.78rem; color: #718096;">
-                                    Tap START in Telegram to receive code.
+                                    Check your mobile messages for the SMS code.
                                 </span>
                                 <a href="#" id="login-back-btn" class="otp-back-link">
-                                    <i class="fas fa-arrow-left"></i> Change Details
+                                    <i class="fas fa-arrow-left"></i> Change Number
+                                </a>
+                            </div>
+                            <div style="margin-top: 10px; text-align: center;">
+                                <a id="login-telegram-link" href="https://t.me/MedCare_Verify_Auth_bot" target="_blank" rel="noopener noreferrer" style="font-size:0.8rem;color:#0088cc;text-decoration:none;">
+                                    <i class="fab fa-telegram"></i> Or get code via Telegram Bot
                                 </a>
                             </div>
                         </div>
 
                         <div class="auth-error-box hidden" id="login-error"></div>
-                        <button type="submit" id="login-submit-btn" class="auth-btn">📲 Get OTP on Telegram</button>
+                        <button type="submit" id="login-submit-btn" class="auth-btn">📲 Send SMS OTP to Phone</button>
                     </form>
                     <p class="auth-switch" id="login-switch-container">New patient? <a href="#" id="switch-to-register">Register profile here</a></p>
                 </div>
@@ -142,28 +149,31 @@
                             </div>
                         </div>
 
-                        <!-- Step 2: Telegram OTP Verification -->
+                        <!-- Step 2: SMS OTP Verification -->
                         <div id="register-otp-group" class="auth-input-group hidden">
-                            <div class="telegram-step-box">
-                                <strong><i class="fab fa-telegram" style="color: #0088cc;"></i> Step 1:</strong> Tap below to open our official bot and receive your security code directly in Telegram:
+                            <div class="sms-step-box" style="background:#f0fdf4;border:1px solid #bbf7d0;padding:12px;border-radius:8px;margin-bottom:12px;color:#166534;font-size:0.88rem;">
+                                <i class="fas fa-sms" style="color: #16a34a;margin-right:6px;"></i>
+                                A 6-digit SMS verification code has been dispatched to your mobile phone.
                             </div>
-                            <a id="register-telegram-link" href="https://t.me/MedCare_Verify_Auth_bot" target="_blank" rel="noopener noreferrer" class="telegram-open-btn">
-                                <i class="fab fa-telegram-plane"></i> Tap to Open @MedCare_Verify_Auth_bot
-                            </a>
-                            <label for="register-otp" style="margin-top: 6px;">Enter 6-Digit Telegram Code</label>
+                            <label for="register-otp" style="margin-top: 6px;">Enter 6-Digit SMS Code</label>
                             <input type="text" id="register-otp" class="otp-input-field" maxlength="6" placeholder="• • • • • •" pattern="\d{6}">
                             <div class="otp-actions">
                                 <span class="otp-hint-text" style="font-size: 0.78rem; color: #718096;">
-                                    Tap START in Telegram to receive code.
+                                    Check your mobile messages for the SMS code.
                                 </span>
                                 <a href="#" id="register-back-btn" class="otp-back-link">
-                                    <i class="fas fa-arrow-left"></i> Change Details
+                                    <i class="fas fa-arrow-left"></i> Change Number
+                                </a>
+                            </div>
+                            <div style="margin-top: 10px; text-align: center;">
+                                <a id="register-telegram-link" href="https://t.me/MedCare_Verify_Auth_bot" target="_blank" rel="noopener noreferrer" style="font-size:0.8rem;color:#0088cc;text-decoration:none;">
+                                    <i class="fab fa-telegram"></i> Or get code via Telegram Bot
                                 </a>
                             </div>
                         </div>
 
                         <div class="auth-error-box hidden" id="register-error"></div>
-                        <button type="submit" id="register-submit-btn" class="auth-btn register-btn">📲 Get OTP on Telegram</button>
+                        <button type="submit" id="register-submit-btn" class="auth-btn register-btn">📲 Send SMS OTP to Phone</button>
                     </form>
                     <p class="auth-switch" id="register-switch-container">Already registered? <a href="#" id="switch-to-login">Sign In here</a></p>
                 </div>
@@ -234,7 +244,10 @@
         </footer>
     </div>
 
+    <!-- Invisible reCAPTCHA container for Firebase Phone Auth -->
+    <div id="recaptcha-container"></div>
+
     <!-- Frontend logic client with Cache Buster -->
-    <script src="/static/script.js?v=3.2"></script>
+    <script src="/static/script.js?v=4.0"></script>
 </body>
 </html>
