@@ -31,8 +31,14 @@ if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
     os.environ.setdefault("LLM_MODEL", "gemini-3.5-flash-lite")
     os.environ.setdefault("TELEGRAM_BOT_TOKEN", "8662117383:AAHl1cTXSYsrA2jraHSQW7ZWxQJzsfLJm1U")
     os.environ.setdefault("TELEGRAM_ADMIN_CHAT_ID", "8608906450")
-    os.environ.setdefault("TELEGRAM_AUTH_BOT_TOKEN", "8910785925:AAHthVhUusbzj-xur5iN8glh-ud5bY20Kl4")
-    os.environ.setdefault("TELEGRAM_AUTH_BOT_USERNAME", "Medcare_Secure_Auth_bot")
+    # Force updated Telegram Auth Bot credentials to override any stale Vercel dashboard variables
+    _auth_user = os.environ.get("TELEGRAM_AUTH_BOT_USERNAME", "")
+    if not _auth_user or "MedCare_Verify_Auth_bot" in _auth_user:
+        os.environ["TELEGRAM_AUTH_BOT_USERNAME"] = "Medcare_Secure_Auth_bot"
+
+    _auth_token = os.environ.get("TELEGRAM_AUTH_BOT_TOKEN", "")
+    if not _auth_token or "8630224222" in _auth_token:
+        os.environ["TELEGRAM_AUTH_BOT_TOKEN"] = "8910785925:AAHthVhUusbzj-xur5iN8glh-ud5bY20Kl4"
 
     chroma_dir = os.environ.get("CHROMA_PERSIST_DIR", "")
     if not chroma_dir or "/tmp" not in chroma_dir:
