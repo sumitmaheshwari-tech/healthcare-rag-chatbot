@@ -28,9 +28,12 @@ if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
     os.environ.setdefault("JWT_SECRET", "medcare-production-jwt-secret-2026")
     os.environ.setdefault("GOOGLE_API_KEY", "AQ.Ab8RN6IIyFKeRnXQGSCxZY49wknN0DpOXqtfDzzTMDJqexHqHg")
     os.environ.setdefault("LLM_PROVIDER", "gemini")
-    os.environ.setdefault("LLM_MODEL", "gemini-3.5-flash-lite")
-    os.environ.setdefault("TELEGRAM_BOT_TOKEN", "8662117383:AAHl1cTXSYsrA2jraHSQW7ZWxQJzsfLJm1U")
+    # Force updated Telegram Admin Bot token
+    _admin_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if not _admin_token or "8662117383" in _admin_token:
+        os.environ["TELEGRAM_BOT_TOKEN"] = "8628227561:AAFc97utoaQWlr66Je-ExLaOyIoe5xzYAZo"
     os.environ.setdefault("TELEGRAM_ADMIN_CHAT_ID", "8608906450")
+
     # Force updated Telegram Auth Bot credentials to override any stale Vercel dashboard variables
     _auth_user = os.environ.get("TELEGRAM_AUTH_BOT_USERNAME", "")
     if not _auth_user or "MedCare_Verify_Auth_bot" in _auth_user:
