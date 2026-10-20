@@ -514,7 +514,7 @@ async def register_patient(req: RegisterRequest, req_raw: Request, response: Res
     """Direct registration is disabled. All registrations must be verified via Telegram OTP."""
     raise HTTPException(
         status_code=403,
-        detail="Direct registration is disabled. Please use the Telegram verification portal (@MedCare_Verify_Auth_bot) to register."
+        detail="Direct registration is disabled. Please use the Telegram verification portal (@Medcare_Secure_Auth_bot) to register."
     )
 
 
@@ -556,7 +556,7 @@ async def login_patient(req: LoginRequest, req_raw: Request, response: Response)
     """Direct login is disabled. All sign-ins must be verified via Telegram OTP."""
     raise HTTPException(
         status_code=403,
-        detail="Direct sign-in is disabled. Please use the Telegram verification portal (@MedCare_Verify_Auth_bot) to receive your 6-digit login token."
+        detail="Direct sign-in is disabled. Please use the Telegram verification portal (@Medcare_Secure_Auth_bot) to receive your 6-digit login token."
     )
 
 
@@ -594,7 +594,7 @@ async def select_patient_profile(req: SelectProfileRequest, response: Response, 
 
 @app.post("/api/auth/telegram/initiate")
 async def initiate_telegram_auth(req: TelegramAuthInitiateRequest, req_raw: Request):
-    """Initiate a Telegram OTP authentication session for @MedCare_Verify_Auth_bot."""
+    """Initiate a Telegram OTP authentication session for @Medcare_Secure_Auth_bot."""
     from services.telegram_auth_service import create_auth_session
     
     db = get_db()
@@ -670,7 +670,7 @@ async def verify_telegram_auth(req: TelegramAuthVerifyRequest, req_raw: Request,
     
     result = verify_session_otp(req.auth_session_id, req.otp)
     if not result:
-        raise HTTPException(status_code=400, detail="Invalid or expired verification code. Please tap START on @MedCare_Verify_Auth_bot to get your code.")
+        raise HTTPException(status_code=400, detail="Invalid or expired verification code. Please tap START on @Medcare_Secure_Auth_bot to get your code.")
 
     flow = result["flow"]
     p_data = result.get("data", {})

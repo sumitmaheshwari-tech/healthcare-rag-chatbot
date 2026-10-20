@@ -31,8 +31,8 @@ if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
     os.environ.setdefault("LLM_MODEL", "gemini-3.5-flash-lite")
     os.environ.setdefault("TELEGRAM_BOT_TOKEN", "8662117383:AAHl1cTXSYsrA2jraHSQW7ZWxQJzsfLJm1U")
     os.environ.setdefault("TELEGRAM_ADMIN_CHAT_ID", "8608906450")
-    os.environ.setdefault("TELEGRAM_AUTH_BOT_TOKEN", "8630224222:AAFqjxhqGmkuEbZeoeRLrh7M4A30fDD-4uc")
-    os.environ.setdefault("TELEGRAM_AUTH_BOT_USERNAME", "MedCare_Verify_Auth_bot")
+    os.environ.setdefault("TELEGRAM_AUTH_BOT_TOKEN", "8910785925:AAHthVhUusbzj-xur5iN8glh-ud5bY20Kl4")
+    os.environ.setdefault("TELEGRAM_AUTH_BOT_USERNAME", "Medcare_Secure_Auth_bot")
 
     chroma_dir = os.environ.get("CHROMA_PERSIST_DIR", "")
     if not chroma_dir or "/tmp" not in chroma_dir:

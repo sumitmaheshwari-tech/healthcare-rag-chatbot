@@ -673,7 +673,7 @@ function setupAuthFormListeners() {
 
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
-                    throw new Error(err.detail || 'Invalid or expired OTP code. Please tap START in @MedCare_Verify_Auth_bot.');
+                    throw new Error(err.detail || 'Invalid or expired OTP code. Please tap START in @Medcare_Secure_Auth_bot.');
                 }
 
                 const data = await res.json();
@@ -794,7 +794,7 @@ function setupAuthFormListeners() {
 
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
-                    throw new Error(err.detail || 'Invalid or expired OTP code. Please tap START in @MedCare_Verify_Auth_bot.');
+                    throw new Error(err.detail || 'Invalid or expired OTP code. Please tap START in @Medcare_Secure_Auth_bot.');
                 }
 
                 const regData = await res.json();

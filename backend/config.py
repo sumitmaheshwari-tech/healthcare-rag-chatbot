@@ -91,8 +91,8 @@ class Settings:
     ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "")
 
     # Dedicated Telegram Patient Authentication Bot
-    TELEGRAM_AUTH_BOT_TOKEN: str = os.getenv("TELEGRAM_AUTH_BOT_TOKEN", "8630224222:AAFqjxhqGmkuEbZeoeRLrh7M4A30fDD-4uc")
-    TELEGRAM_AUTH_BOT_USERNAME: str = os.getenv("TELEGRAM_AUTH_BOT_USERNAME", "MedCare_Verify_Auth_bot")
+    TELEGRAM_AUTH_BOT_TOKEN: str = os.getenv("TELEGRAM_AUTH_BOT_TOKEN", "8910785925:AAHthVhUusbzj-xur5iN8glh-ud5bY20Kl4")
+    TELEGRAM_AUTH_BOT_USERNAME: str = os.getenv("TELEGRAM_AUTH_BOT_USERNAME", "Medcare_Secure_Auth_bot")
 
 
 settings = Settings()
