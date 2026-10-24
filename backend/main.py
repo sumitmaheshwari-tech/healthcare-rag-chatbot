@@ -427,7 +427,8 @@ async def chat(request: ChatRequest, req_raw: Request, response: Response):
                             if not final_text and output and hasattr(output, "content") and output.content:
                                 final_text = output.content if isinstance(output.content, str) else str(output.content)
 
-                            if not (zero_tool_intent or tools_have_run) and final_text:
+                            # If tokens were not streamed chunk-by-chunk, emit final_text now
+                            if not accumulated_full_text and final_text:
                                 if t_first_token is None:
                                     t_first_token = time.perf_counter()
                                     ttft_ms = (t_first_token - t_request_start) * 1000
