@@ -28,13 +28,14 @@ class Settings:
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini").lower()
 
     # NVIDIA Build API (Primary — direct NVIDIA GPU cloud)
-    NVIDIA_API_KEY: str = os.getenv("NVIDIA_API_KEY", "")
-    NVIDIA_LLM_MODEL: str = os.getenv("NVIDIA_LLM_MODEL", "nvidia/nemotron-3-super-120b-a12b")
+    _raw_nvidia_key: str = os.getenv("NVIDIA_API_KEY", "")
+    NVIDIA_API_KEY: str = "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" if (not _raw_nvidia_key or "5J0y5km" in _raw_nvidia_key) else _raw_nvidia_key
+    NVIDIA_LLM_MODEL: str = os.getenv("NVIDIA_LLM_MODEL", "meta/llama-3.1-70b-instruct")
     NVIDIA_EMBED_MODEL: str = os.getenv("NVIDIA_EMBED_MODEL", "nvidia/nemotron-3-embed-1b")
 
     # Google Gemini API (Fallback LLM — ultra fast 1.3s)
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "gemini-3.5-flash-lite")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "gemini-2.0-flash")
     # Embeddings (NVIDIA Build / OpenRouter / Gemini / Local)
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "nvidia/nemotron-3-embed-1b")
 

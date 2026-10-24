@@ -28,6 +28,20 @@ if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
     os.environ.setdefault("JWT_SECRET", "medcare-production-jwt-secret-2026")
     os.environ.setdefault("GOOGLE_API_KEY", "AQ.Ab8RN6IIyFKeRnXQGSCxZY49wknN0DpOXqtfDzzTMDJqexHqHg")
     os.environ.setdefault("LLM_PROVIDER", "gemini")
+    
+    # Enforce Gemini 2.0 Flash primary model
+    _llm_model = os.environ.get("LLM_MODEL", "")
+    if not _llm_model or "3.5" in _llm_model:
+        os.environ["LLM_MODEL"] = "gemini-2.0-flash"
+
+    # Enforce NVIDIA API Key and model for high-availability failover on Vercel
+    _nvidia_key = os.environ.get("NVIDIA_API_KEY", "")
+    if not _nvidia_key or "5J0y5km" in _nvidia_key:
+        os.environ["NVIDIA_API_KEY"] = "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"
+    os.environ.setdefault("NVIDIA_LLM_MODEL", "meta/llama-3.1-70b-instruct")
+
+    # OpenRouter API Key fallback from environment
+    os.environ.setdefault("OPENROUTER_API_KEY", os.getenv("OPENROUTER_API_KEY", ""))
     # Force updated Telegram Admin Bot token
     _admin_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     if not _admin_token or "8662117383" in _admin_token:

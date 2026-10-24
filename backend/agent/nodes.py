@@ -107,9 +107,9 @@ def get_fallback_llm(provider: str):
                     temperature=0,
                     request_timeout=60,
                 )
-        elif provider == "gemini" and settings.GOOGLE_API_KEY:
+        elif (provider == "gemini" or provider == "gemini-1.5-flash") and settings.GOOGLE_API_KEY:
             from langchain_google_genai import ChatGoogleGenerativeAI
-            model_name = settings.LLM_MODEL.replace("models/", "")
+            model_name = "gemini-1.5-flash" if provider == "gemini-1.5-flash" else settings.LLM_MODEL.replace("models/", "")
             return ChatGoogleGenerativeAI(
                 model=model_name,
                 google_api_key=settings.GOOGLE_API_KEY,
@@ -295,7 +295,7 @@ async def agent_node(state, config, primary_llm, tools):
     trimmed_messages = [SystemMessage(content=full_system_prompt)] + trimmed_messages
 
     # ── Multi-Provider Failover Gateway ───────────────────────────────
-    providers_to_try = [settings.LLM_PROVIDER, "nvidia", "gemini", "openrouter"]
+    providers_to_try = [settings.LLM_PROVIDER, "nvidia", "gemini-1.5-flash", "openrouter"]
     
     # Remove duplicates while keeping order
     seen = set()
@@ -326,7 +326,7 @@ async def agent_node(state, config, primary_llm, tools):
                 try:
                     response = await asyncio.wait_for(
                         llm_with_tools.ainvoke(payload_messages, config=config),
-                        timeout=15.0
+                        timeout=25.0
                     )
                     if response is None:
                         raise RuntimeError(f"Provider '{provider}' returned empty response")
