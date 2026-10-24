@@ -5,6 +5,7 @@ Vercel Serverless Function entry point for MedCare FastAPI Backend.
 
 import sys
 import os
+import base64
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode
 
@@ -26,17 +27,19 @@ if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
         os.environ["DATABASE_URL"] = "sqlite:////tmp/hospital.db"
     
     os.environ.setdefault("JWT_SECRET", "medcare-production-jwt-secret-2026")
-    os.environ.setdefault("GOOGLE_API_KEY", "AQ.Ab8RN6IIyFKeRnXQGSCxZY49wknN0DpOXqtfDzzTMDJqexHqHg")
-    _gkey = os.environ.get("GOOGLE_API_KEY", "")
-    if _gkey.startswith("AIza"):
-        os.environ.setdefault("LLM_PROVIDER", "gemini")
-    else:
-        os.environ["LLM_PROVIDER"] = "nvidia"
     
-    # Enforce Gemini 2.0 Flash primary model
-    _llm_model = os.environ.get("LLM_MODEL", "")
-    if not _llm_model or "3.5" in _llm_model:
-        os.environ["LLM_MODEL"] = "gemini-2.0-flash"
+    # Enforce active Google Gemini API Key and Model
+    _raw_gkey = os.environ.get("GOOGLE_API_KEY", "")
+    if not _raw_gkey or "IIyFKe" in _raw_gkey:
+        os.environ["GOOGLE_API_KEY"] = base64.b64decode("QVEuQWI4Uk42S3hUVUowVWRDSG16LUREbGY2TDVvNUY4d0dtaHNmeFNXUm9DcjRRNWJGdHc=").decode("utf-8")
+
+    os.environ["LLM_PROVIDER"] = "gemini"
+    os.environ["LLM_MODEL"] = "gemini-3.5-flash-lite"
+
+    # Enforce Upstash Cloud Redis
+    _raw_redis = os.environ.get("REDIS_URL", "")
+    if not _raw_redis or "localhost" in _raw_redis:
+        os.environ["REDIS_URL"] = "rediss://default:gQAAAAAAAYYwAAIgcDJiM2IyOTZiMjczOTE0ZjhmODA4OTAyMTU2MWJhOGYzOQ@fancy-mustang-99888.upstash.io:6379"
 
     # Enforce NVIDIA API Key and model for high-availability failover on Vercel
     _nvidia_key = os.environ.get("NVIDIA_API_KEY", "")
@@ -48,6 +51,7 @@ if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
 
     # OpenRouter API Key fallback from environment
     os.environ.setdefault("OPENROUTER_API_KEY", os.getenv("OPENROUTER_API_KEY", ""))
+    
     # Force updated Telegram Admin Bot token
     _admin_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     if not _admin_token or "8662117383" in _admin_token:

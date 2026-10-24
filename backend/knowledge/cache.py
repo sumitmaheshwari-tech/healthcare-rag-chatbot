@@ -45,14 +45,40 @@ class TTLCache:
 
 
 class RedisCache:
-    def __init__(self, host="localhost", port=6379, db=0, ttl_seconds=300):
+    def __init__(self, host="localhost", port=6379, db=0, ttl_seconds=300, redis_url=None, key_prefix=""):
         self.ttl_seconds = ttl_seconds
+        self.key_prefix = key_prefix
         self.is_connected = False
         self.fallback = TTLCache(ttl_seconds=ttl_seconds)
         self.client = None
 
+        url = redis_url or os.environ.get("REDIS_URL", "")
+        # If url is provided and is a valid remote cloud Redis (starts with redis:// or rediss://)
+        # and not plain localhost:
+        if url and (url.startswith("rediss://") or (url.startswith("redis://") and "localhost" not in url and "127.0.0.1" not in url)):
+            try:
+                import redis
+                # Force database 0 for Upstash Redis / cloud compatibility
+                clean_url = url
+                if clean_url.rstrip("/").split("/")[-1].isdigit():
+                    clean_url = "/".join(clean_url.rstrip("/").split("/")[:-1]) + "/0"
+
+                self.client = redis.from_url(
+                    clean_url,
+                    socket_connect_timeout=2.0,
+                    socket_timeout=2.0,
+                    retry_on_timeout=True
+                )
+                self.client.ping()
+                self.is_connected = True
+                print(f"[REDIS] Connected successfully to Cloud Redis ({clean_url.split('@')[-1] if '@' in clean_url else 'cloud'})")
+                return
+            except Exception as e:
+                print(f"[REDIS] Remote Redis connection failed ({e}). Gracefully falling back to memory TTLCache.")
+                return
+
+        # If on serverless without remote cloud Redis configured, skip local host socket check
         if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
-            # Serverless functions are stateless with no local Redis daemon; use in-memory TTLCache directly
             return
 
         # Map localhost explicitly to IPv4 loopback to avoid Windows IPv6 dual-stack DNS check delays
@@ -66,49 +92,55 @@ class RedisCache:
             s.close()
 
             import redis
-            self.client = redis.Redis(host=resolved_host, port=port, db=db, socket_connect_timeout=1.0)
+            self.client = redis.Redis(host=resolved_host, port=port, db=0, socket_connect_timeout=1.0)
             self.client.ping()
             self.is_connected = True
             print(f"[REDIS] Successfully connected to Redis on {resolved_host}:{port}")
         except Exception as e:
             print(f"[REDIS] Redis is unavailable on {resolved_host}:{port} ({e}). Gracefully falling back to local memory cache.")
 
+    def _format_key(self, key: str) -> str:
+        return f"{self.key_prefix}{key}" if self.key_prefix else key
+
     def get(self, key: str):
+        full_key = self._format_key(key)
         if self.is_connected and self.client:
             try:
-                val = self.client.get(key)
+                val = self.client.get(full_key)
                 if val:
                     try:
                         return json.loads(val.decode("utf-8"))
                     except Exception:
                         return val.decode("utf-8")
             except Exception as e:
-                print(f"[REDIS ERROR] get key '{key}' failed: {e}. Using fallback cache.")
-                return self.fallback.get(key)
-        return self.fallback.get(key)
+                print(f"[REDIS ERROR] get key '{full_key}' failed: {e}. Using fallback cache.")
+                return self.fallback.get(full_key)
+        return self.fallback.get(full_key)
 
     def set(self, key: str, value):
+        full_key = self._format_key(key)
         if self.is_connected and self.client:
             try:
                 serialized = json.dumps(value) if not isinstance(value, (str, bytes)) else value
-                self.client.setex(key, self.ttl_seconds, serialized)
+                self.client.set(full_key, serialized, ex=self.ttl_seconds)
                 return
             except Exception as e:
-                print(f"[REDIS ERROR] set key '{key}' failed: {e}. Using fallback cache.")
-                self.fallback.set(key, value)
+                print(f"[REDIS ERROR] set key '{full_key}' failed: {e}. Using fallback cache.")
+                self.fallback.set(full_key, value)
         else:
-            self.fallback.set(key, value)
+            self.fallback.set(full_key, value)
 
     def delete(self, key: str):
+        full_key = self._format_key(key)
         if self.is_connected and self.client:
             try:
-                self.client.delete(key)
+                self.client.delete(full_key)
                 return
             except Exception as e:
-                print(f"[REDIS ERROR] delete key '{key}' failed: {e}. Using fallback cache.")
-                self.fallback.delete(key)
+                print(f"[REDIS ERROR] delete key '{full_key}' failed: {e}. Using fallback cache.")
+                self.fallback.delete(full_key)
         else:
-            self.fallback.delete(key)
+            self.fallback.delete(full_key)
 
 
 # ── Global Cache Instances ──────────────────────────────────────────
@@ -119,13 +151,13 @@ REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 
 # Embedding cache: "patient_uid:query" -> embedding vector
-embedding_cache = RedisCache(host="127.0.0.1", port=6379, db=0, ttl_seconds=settings.CACHE_EMBEDDING_TTL)
+embedding_cache = RedisCache(ttl_seconds=settings.CACHE_EMBEDDING_TTL, redis_url=settings.REDIS_URL, key_prefix="emb:")
 
 # Retrieval cache: "patient_uid:query" -> string response list of docs
-retrieval_cache = RedisCache(host="127.0.0.1", port=6379, db=1, ttl_seconds=settings.CACHE_RETRIEVAL_TTL)
+retrieval_cache = RedisCache(ttl_seconds=settings.CACHE_RETRIEVAL_TTL, redis_url=settings.REDIS_URL, key_prefix="ret:")
 
 # Response cache: "patient_uid:query" -> LLM response (shortest TTL for freshness)
-response_cache = RedisCache(host="127.0.0.1", port=6379, db=2, ttl_seconds=settings.CACHE_RESPONSE_TTL)
+response_cache = RedisCache(ttl_seconds=settings.CACHE_RESPONSE_TTL, redis_url=settings.REDIS_URL, key_prefix="")
 
 
 # ── Response Cache Helper Functions ────────────────────────────────
