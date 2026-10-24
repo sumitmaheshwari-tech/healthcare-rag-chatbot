@@ -40,6 +40,9 @@ else:
 
 
 async def _get_async_checkpointer():
+    if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+        from langgraph.checkpoint.memory import MemorySaver
+        return MemorySaver()
     """Create an AsyncSqliteSaver for async-compatible persistent checkpointing."""
     try:
         from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver

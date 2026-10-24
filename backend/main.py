@@ -354,44 +354,64 @@ async def chat(request: ChatRequest, req_raw: Request, response: Response):
                 yield f"data: {json.dumps({'type': 'done'})}\n\n"
                 return
 
-            # ── Buffered streaming with keepalive & timeout ──────────
+            # ── Real-time streaming with keepalive & timeout ─────────
             run_text_buffer = []
-            current_run_id = None
+            accumulated_full_text = []
             tool_runs_completed = 0
             MAX_TOOL_ROUNDS = 6
             REQUEST_TIMEOUT_SECONDS = 90
+            tools_have_run = False
+            is_tool_call_turn = False
 
-            async def _run_agent_stream():
-                """Run the agent and collect SSE events. Returns list of SSE strings."""
-                nonlocal run_text_buffer, current_run_id, tool_runs_completed, t_first_token
-                sse_events = []
+            # Intent classification check to stream zero-tool queries immediately
+            from agent.intent_classifier import classify_intent
+            classified_info = classify_intent(user_message)
+            zero_tool_intent = classified_info.get("intent") in ("CHITCHAT", "DIRECT_ACTION", "OUT_OF_DOMAIN", "HOSPITAL_INFO")
 
-                async for event in active_graph.astream_events(
+            try:
+                # Wrap astream_events with timeout-protected async iterator
+                stream_iter = active_graph.astream_events(
                     {
                         "messages": [HumanMessage(content=user_message)],
                         "authenticated_patient_uid": auth_uid
                     },
                     config=config,
                     version="v2"
-                ):
+                ).__aiter__()
+
+                while True:
+                    try:
+                        event = await asyncio.wait_for(stream_iter.__anext__(), timeout=REQUEST_TIMEOUT_SECONDS)
+                    except StopAsyncIteration:
+                        break
+
                     evt_name = event["event"]
-                    run_id = event.get("run_id")
 
                     if evt_name == "on_chat_model_start":
-                        current_run_id = run_id
                         run_text_buffer = []
-                        sse_events.append(": keepalive\n\n")
+                        is_tool_call_turn = False
+                        yield ": keepalive\n\n"
 
                     elif evt_name == "on_chat_model_stream":
                         chunk = event["data"]["chunk"]
-                        if hasattr(chunk, "content") and chunk.content:
-                            if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
-                                continue
-                            text_chunk = chunk.content
-                            if isinstance(text_chunk, list):
-                                text_chunk = "".join([b.get("text", "") if isinstance(b, dict) else str(b) for b in text_chunk])
-                            if text_chunk:
-                                run_text_buffer.append(text_chunk)
+                        if hasattr(chunk, "tool_call_chunks") and chunk.tool_call_chunks:
+                            is_tool_call_turn = True
+                            continue
+
+                        text_chunk = chunk.content
+                        if isinstance(text_chunk, list):
+                            text_chunk = "".join([b.get("text", "") if isinstance(b, dict) else str(b) for b in text_chunk])
+
+                        if text_chunk and not is_tool_call_turn:
+                            run_text_buffer.append(text_chunk)
+                            # Direct streaming: yield chunk immediately if no tools needed or tools already finished
+                            if zero_tool_intent or tools_have_run:
+                                if t_first_token is None:
+                                    t_first_token = time.perf_counter()
+                                    ttft_ms = (t_first_token - t_request_start) * 1000
+                                    print(f"[PERF REALTIME STREAM] TTFT: {ttft_ms:.0f}ms")
+                                accumulated_full_text.append(text_chunk)
+                                yield f"data: {json.dumps({'type': 'content', 'text': text_chunk})}\n\n"
 
                     elif evt_name == "on_chat_model_end":
                         output = event["data"].get("output")
@@ -406,41 +426,37 @@ async def chat(request: ChatRequest, req_raw: Request, response: Response):
                             final_text = "".join(run_text_buffer)
                             if not final_text and output and hasattr(output, "content") and output.content:
                                 final_text = output.content if isinstance(output.content, str) else str(output.content)
-                            if final_text:
+
+                            if not (zero_tool_intent or tools_have_run) and final_text:
                                 if t_first_token is None:
                                     t_first_token = time.perf_counter()
                                     ttft_ms = (t_first_token - t_request_start) * 1000
-                                    print(f"[PERF] TTFT (time to first token): {ttft_ms:.0f}ms")
-                                sse_events.append(f"data: {json.dumps({'type': 'content', 'text': final_text})}\n\n")
+                                    print(f"[PERF BATCH FALLBACK] TTFT: {ttft_ms:.0f}ms")
+                                accumulated_full_text.append(final_text)
+                                yield f"data: {json.dumps({'type': 'content', 'text': final_text})}\n\n"
+
+                            complete_resp_str = "".join(accumulated_full_text)
+                            if complete_resp_str:
                                 try:
-                                    set_response_cache(user_message, final_text, patient_uid=auth_uid or "guest")
+                                    set_response_cache(user_message, complete_resp_str, patient_uid=auth_uid or "guest")
                                 except Exception as ce:
                                     print(f"[CACHE WARNING] Failed to cache response: {ce}")
                             run_text_buffer = []
 
                     elif evt_name == "on_tool_start":
-                        sse_events.append(": keepalive\n\n")
+                        yield ": keepalive\n\n"
 
                     elif evt_name == "on_tool_end":
+                        tools_have_run = True
                         tool_runs_completed += 1
-                        sse_events.append(": keepalive\n\n")
+                        yield ": keepalive\n\n"
                         if tool_runs_completed >= MAX_TOOL_ROUNDS:
                             print(f"[GUARD] Tool loop detected: {tool_runs_completed} rounds. Force-stopping.")
-                            sse_events.append(f"data: {json.dumps({'type': 'content', 'text': 'I apologize, I encountered an issue processing your request. Could you please provide more specific details (e.g., exact date in YYYY-MM-DD format and preferred time)?'})}\n\n")
+                            guard_text = "I apologize, I encountered an issue processing your request. Could you please provide more specific details (e.g., exact date in YYYY-MM-DD format and preferred time)?"
+                            yield f"data: {json.dumps({'type': 'content', 'text': guard_text})}\n\n"
                             t_first_token = t_first_token or time.perf_counter()
                             break
 
-                return sse_events
-
-            # Execute with timeout
-            try:
-                import asyncio
-                sse_results = await asyncio.wait_for(
-                    _run_agent_stream(),
-                    timeout=REQUEST_TIMEOUT_SECONDS
-                )
-                for sse in sse_results:
-                    yield sse
             except asyncio.TimeoutError:
                 print(f"[TIMEOUT] Request exceeded {REQUEST_TIMEOUT_SECONDS}s limit.")
                 yield f"data: {json.dumps({'type': 'content', 'text': 'I apologize, the request took too long. Please try again — the server may have been warming up. If this persists, try breaking your request into steps.'})}\n\n"

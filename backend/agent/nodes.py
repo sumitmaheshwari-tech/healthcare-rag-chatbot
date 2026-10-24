@@ -319,7 +319,11 @@ async def agent_node(state, config, primary_llm, tools):
             continue
 
         try:
-            llm_with_tools = llm.bind_tools(tools)
+            # Skip tool binding overhead for intents that never call tools
+            if classified_intent in ("CHITCHAT", "DIRECT_ACTION", "OUT_OF_DOMAIN"):
+                llm_with_tools = llm
+            else:
+                llm_with_tools = llm.bind_tools(tools)
             
             # Retry twice with exponential backoff for this provider
             for attempt in range(2):
