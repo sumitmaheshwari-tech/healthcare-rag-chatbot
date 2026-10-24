@@ -43,7 +43,7 @@ if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
     if not _nvidia_key or "5J0y5km" in _nvidia_key:
         os.environ["NVIDIA_API_KEY"] = "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"
     _nvidia_model = os.environ.get("NVIDIA_LLM_MODEL", "")
-    if not _nvidia_model or "3.1" in _nvidia_model:
+    if not _nvidia_model or "nemotron" in _nvidia_model or "3.1" in _nvidia_model:
         os.environ["NVIDIA_LLM_MODEL"] = "meta/llama-3.2-11b-vision-instruct"
 
     # OpenRouter API Key fallback from environment
