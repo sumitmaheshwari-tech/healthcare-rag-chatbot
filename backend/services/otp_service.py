@@ -64,6 +64,8 @@ def check_ip_lockout(ip_address: str) -> Optional[float]:
     """Check if the given IP address is currently locked out.
     Returns: remaining lockout seconds if locked, otherwise None.
     """
+    if not ip_address or ip_address in ("127.0.0.1", "localhost", "unknown"):
+        return None
     now = time.time()
     if ip_address in _ip_attempt_store:
         record = _ip_attempt_store[ip_address]
@@ -77,6 +79,8 @@ def check_ip_lockout(ip_address: str) -> Optional[float]:
 
 def increment_ip_failed_attempt(ip_address: str):
     """Increment failed attempts count for an IP address. Lockout for 15m after 5 failures."""
+    if not ip_address or ip_address in ("127.0.0.1", "localhost", "unknown"):
+        return
     now = time.time()
     record = _ip_attempt_store.setdefault(ip_address, {"attempts": 0, "locked_until": None})
     record["attempts"] += 1
