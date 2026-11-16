@@ -106,7 +106,9 @@ function generateSessionId() {
 
 async function checkAuthSession() {
     try {
-        const res = await fetch(`${API_BASE}/api/patients/me`);
+        const res = await fetch(`${API_BASE}/api/patients/me`, {
+            credentials: 'include'
+        });
         if (res.ok) {
             const data = await res.json();
             if (data.success && data.patient) {
@@ -142,6 +144,7 @@ async function sendMessage(text) {
         const res = await fetch(`${API_BASE}/api/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
             body: JSON.stringify({
                 message: text,
                 session_id: sessionId
@@ -201,19 +204,6 @@ async function sendMessage(text) {
                     }
                     botText += event.text;
                     updateBotMessageContent(botBubble, botText);
-                } else if (event.type === 'auth') {
-                    // Succeeded login/registration during chat - call helper to set HttpOnly cookies
-                    await fetch(`${API_BASE}/api/patients/set-session`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ patient_id: event.patient_id }),
-                    });
-                    // Set credentials in UI
-                    currentPatientId = event.patient_id;
-                    currentPatientName = event.patient_name;
-                    authLoggedOutContainer.classList.add('hidden');
-                    authLoggedInContainer.classList.remove('hidden');
-                    authVerifiedText.innerHTML = `<i class="fas fa-user-check" style="color: #2f855a;"></i> Verified: <strong>${currentPatientName}</strong>`;
                 } else if (event.type === 'error') {
                     hideTypingIndicator();
                     addMessage(event.message || 'An unknown error occurred.', 'bot', true);
@@ -517,9 +507,13 @@ async function chooseProfile(patientUid, patientName) {
         const res = await fetch(`${API_BASE}/api/patients/select-profile`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
             body: JSON.stringify({ patient_uid: patientUid })
         });
-        if (!res.ok) throw new Error('Failed to select profile.');
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to select profile.');
+        }
         const data = await res.json();
         profileSelectCard.classList.add('hidden');
         loginPatient({
@@ -663,6 +657,7 @@ function setupAuthFormListeners() {
                 const res = await fetch(`${API_BASE}/api/auth/telegram/verify`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
                     body: JSON.stringify({
                         auth_session_id: currentLoginSessionId,
                         otp: otp,
@@ -783,6 +778,7 @@ function setupAuthFormListeners() {
                 const res = await fetch(`${API_BASE}/api/auth/telegram/verify`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
                     body: JSON.stringify({
                         auth_session_id: currentRegisterSessionId,
                         otp: otp,
@@ -910,7 +906,10 @@ function logoutPatientUI() {
 
 async function logoutPatientSession() {
     try {
-        await fetch(`${API_BASE}/api/patients/logout`, { method: 'POST' });
+        await fetch(`${API_BASE}/api/patients/logout`, {
+            method: 'POST',
+            credentials: 'include'
+        });
     } catch (err) {
         console.error("Logout error:", err);
     }
