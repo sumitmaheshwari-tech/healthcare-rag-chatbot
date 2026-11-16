@@ -106,8 +106,8 @@ class Settings:
 
     _raw_admin_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     TELEGRAM_BOT_TOKEN: str = (
-        _raw_admin_token if (_raw_admin_token and "8628227561" not in _raw_admin_token and "8662117383" not in _raw_admin_token)
-        else (os.getenv("TELEGRAM_AUTH_BOT_TOKEN") or _bot_fallback)
+        _raw_admin_token if (_raw_admin_token and _raw_admin_token.startswith("9029603086:"))
+        else _bot_fallback
     )
 
     _raw_admin_chat = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "")
@@ -119,8 +119,8 @@ class Settings:
     # Dedicated Telegram Patient Authentication Bot
     _raw_auth_token = os.getenv("TELEGRAM_AUTH_BOT_TOKEN", "")
     TELEGRAM_AUTH_BOT_TOKEN: str = (
-        _raw_auth_token if (_raw_auth_token and "8910785925" not in _raw_auth_token and "8630224222" not in _raw_auth_token)
-        else (os.getenv("TELEGRAM_BOT_TOKEN") or _bot_fallback)
+        _raw_auth_token if (_raw_auth_token and _raw_auth_token.startswith("9029603086:"))
+        else _bot_fallback
     )
 
     _raw_auth_user = os.getenv("TELEGRAM_AUTH_BOT_USERNAME", "")
