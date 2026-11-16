@@ -14,10 +14,41 @@ from database.connection import get_db, engine
 from database.encrypt import encrypt_value, decrypt_value
 
 
+def _ensure_admin_patient(session):
+    """Ensure the admin phone (6398023059) has a seeded profile for immediate OTP login & testing."""
+    try:
+        existing = session.query(Patient).filter(Patient.id == "pat-admin-uuid").first()
+        if not existing:
+            user = session.query(User).filter(User.username == "pat-admin-uuid").first()
+            if not user:
+                user = User(username="pat-admin-uuid", role=UserRole.ADMIN, password_hash="pbkdf2:sha256:mock_hash")
+                session.add(user)
+                session.flush()
+            admin_pat = Patient(
+                id="pat-admin-uuid",
+                user_id=user.id,
+                name="Sumit Maheshwari (Admin)",
+                dob=encrypt_value("1999-01-01"),
+                age=27,
+                gender="Male",
+                phone=encrypt_value("+91-6398023059"),
+                email=encrypt_value("admin@medcare.com"),
+                address=encrypt_value("MedCare Command Center"),
+                blood_group=encrypt_value("O+"),
+                emergency_contact=encrypt_value("+91-6398023059")
+            )
+            session.add(admin_pat)
+            session.commit()
+    except Exception as e:
+        session.rollback()
+        print(f"[SEED WARNING] Could not ensure admin profile: {e}")
+
+
 def seed_database(session):
     """Seed the database with normalized demo data (for backward compatibility)."""
-    # Skip if data already exists
+    # Skip if data already exists, but always ensure admin phone profile exists
     if session.query(Doctor).first():
+        _ensure_admin_patient(session)
         print("[SEED] Database already seeded — skipping.")
         return
 
@@ -109,6 +140,7 @@ def seed_database(session):
 
         # 4. Seed Patients
         patients_data = [
+            ("pat-admin-uuid", "Sumit Maheshwari (Admin)", "1999-01-01", 27, "Male", "+91-6398023059", "admin@medcare.com", "MedCare Command Center", "O+", "+91-6398023059"),
             ("pat-rahul-uuid", "Rahul Sharma", "1991-07-12", 35, "Male", "+91-9876543210", "rahul.sharma@email.com", "12, Jubilee Hills, Hyderabad", "B+", "+91-9876543211"),
             ("pat-priya-uuid", "Priya Patel", "1998-02-28", 28, "Female", "+91-9123456789", "priya.patel@email.com", "45, Banjara Hills, Hyderabad", "A+", "+91-9123456790"),
             ("pat-amit-uuid", "Amit Kumar", "1974-11-05", 52, "Male", "+91-8765432109", "amit.kumar@email.com", "78, Madhapur, Hyderabad", "O+", "+91-8765432110"),

@@ -7,8 +7,12 @@ from config import settings
 
 def send_telegram_alert(booking_data: dict):
     """Send an instant HTML push notification to Admin Telegram."""
-    token = settings.TELEGRAM_BOT_TOKEN
-    chat_id = settings.TELEGRAM_ADMIN_CHAT_ID
+    token = settings.TELEGRAM_BOT_TOKEN or settings.TELEGRAM_AUTH_BOT_TOKEN
+    try:
+        from services.telegram_auth_service import _get_active_admin_chat_id
+        chat_id = _get_active_admin_chat_id()
+    except Exception:
+        chat_id = settings.TELEGRAM_ADMIN_CHAT_ID
 
     if not token or not chat_id:
         return

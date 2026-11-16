@@ -355,9 +355,9 @@ class TelegramAuthSession(Base):
     session_id = Column(String(100), unique=True, nullable=False, index=True)
     flow = Column(String(20), nullable=False)  # "login" or "register"
     patient_data_json = Column(Text, nullable=False)  # JSON serialized data
-    otp = Column(String(10), nullable=False)
+    otp = Column(String(255), nullable=False)  # Fernet-encrypted 6-digit OTP
+    attempts = Column(Integer, default=0, nullable=False)  # Max 3 attempts before invalidation
     chat_id = Column(BigInteger, nullable=True, index=True)
     status = Column(String(50), default="AWAITING_TELEGRAM_START")
     expires_at = Column(Float, nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-
