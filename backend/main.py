@@ -738,8 +738,19 @@ async def verify_telegram_auth(req: TelegramAuthVerifyRequest, req_raw: Request,
             detail=f"Too many failed verification attempts from this location. Temporarily locked. Try again in {int(ip_remaining // 60) + 1} minutes."
         )
 
-    # 2. Verify Session OTP (strictly bound to req.auth_session_id, max 3 attempts)
-    result = verify_session_otp(req.auth_session_id, req.otp)
+    # 2. Verify Session OTP (bound to req.auth_session_id or lookup by phone)
+    session_id = req.auth_session_id
+    from services.telegram_auth_service import _load_session_by_id, _get_redis_cache
+    if not session_id or not _load_session_by_id(session_id):
+        target_phone = normalize_phone_number(req.phone or req.patient_uid or "")
+        if target_phone:
+            rcache = _get_redis_cache()
+            if rcache:
+                phone_sid = rcache.get(f"tg_phone:{target_phone}")
+                if phone_sid and isinstance(phone_sid, str) and phone_sid.startswith("auth_"):
+                    session_id = phone_sid
+
+    result = verify_session_otp(session_id, req.otp)
     if not result or not result.get("success"):
         increment_ip_failed_attempt(ip_addr)
         err_msg = (result or {}).get("error") or "Invalid or expired verification code. Please tap START on @Medcare_Secure_Auth_bot to get your code."
@@ -909,14 +920,53 @@ async def telegram_auth_webhook(req: Request):
         if not _hmac.compare_digest(expected_secret, provided_secret):
             raise HTTPException(status_code=403, detail="Invalid Telegram webhook secret token.")
 
-    from services.telegram_auth_service import process_telegram_update
+    from services.telegram_auth_service import process_telegram_update, _get_redis_cache
     try:
         data = await req.json()
+        rcache = _get_redis_cache()
+        if rcache:
+            try:
+                rcache.set("tg_debug_last_webhook", {"time": time.time(), "payload": data})
+            except Exception:
+                pass
         process_telegram_update(data)
         return {"ok": True}
     except Exception as e:
         print(f"[WEBHOOK ERROR] {e}")
         return {"ok": False, "error": str(e)}
+
+
+@app.get("/api/telegram/test-send")
+async def telegram_test_send(chat_id: Optional[str] = None):
+    """Diagnostic endpoint to test Telegram message delivery live from Vercel."""
+    from services.telegram_auth_service import _send_telegram_direct_message, _get_bot_token, _get_active_admin_chat_id, _get_redis_cache
+
+    target_chat = int(chat_id or _get_active_admin_chat_id() or 9224791176)
+    token = _get_bot_token()
+    token_masked = token[:6] + "..." + token[-4:] if len(token) > 10 else "invalid"
+
+    test_msg = (
+        f"🔔 <b>MedCare Vercel Live Diagnostic</b>\n\n"
+        f"✅ Bot delivery test from Vercel serverless function.\n"
+        f"Timestamp: {datetime.utcnow().isoformat()}Z"
+    )
+
+    success = _send_telegram_direct_message(target_chat, test_msg)
+    rcache = _get_redis_cache()
+    last_send_debug = None
+    if rcache:
+        try:
+            last_send_debug = rcache.get("tg_debug_last_send")
+        except Exception:
+            pass
+
+    return {
+        "success": success,
+        "target_chat": target_chat,
+        "token_prefix": token[:10],
+        "token_masked": token_masked,
+        "redis_last_send": last_send_debug
+    }
 
 
 @app.get("/api/telegram/setup-webhook")
