@@ -1,26 +1,32 @@
 {
-  "functions": {
-    "api/index.py": {
-      "includeFiles": "{backend/**,public/**,frontend/**}",
-      "maxDuration": 60
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "app": {
+      "root": "public"
+    },
+    "api": {
+      "root": ".",
+      "framework": "fastapi"
     }
   },
   "rewrites": [
     {
       "source": "/api",
-      "destination": "/api/index.py?__orig_path=/api/health"
+      "destination": {
+        "service": "api"
+      }
     },
     {
       "source": "/api/(.*)",
-      "destination": "/api/index.py?__orig_path=/api/$1"
-    },
-    {
-      "source": "/static/(.*)",
-      "destination": "/static/$1"
+      "destination": {
+        "service": "api"
+      }
     },
     {
       "source": "/(.*)",
-      "destination": "/index.html"
+      "destination": {
+        "service": "app"
+      }
     }
   ]
 }

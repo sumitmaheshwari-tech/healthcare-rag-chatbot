@@ -12,10 +12,16 @@ build/
 venv/
 env/
 
-# Environment variables (NEVER commit API keys!)
+# Environment variables & secrets (NEVER commit API keys or .env files!)
 .env
-.env.local
-.env.production
+.env.*
+!.env.example
+vercel.env
+*.pem
+*.key
+
+# Vercel & Deployment local state
+.vercel/
 
 # Database & SQLite files (NEVER commit patient databases!)
 *.db

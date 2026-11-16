@@ -52,20 +52,24 @@ if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
     # OpenRouter API Key fallback from environment
     os.environ.setdefault("OPENROUTER_API_KEY", os.getenv("OPENROUTER_API_KEY", ""))
     
-    # Force updated Telegram Admin Bot token
+    # Admin Notifications & Telegram Bot configuration
+    os.environ.setdefault("ADMIN_PHONE", "6398023059")
+    # Bot tokens MUST come from Vercel Environment Variables (never hardcode secrets in source).
     _admin_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    if not _admin_token or "8662117383" in _admin_token:
-        os.environ["TELEGRAM_BOT_TOKEN"] = "8628227561:AAFc97utoaQWlr66Je-ExLaOyIoe5xzYAZo"
-    os.environ.setdefault("TELEGRAM_ADMIN_CHAT_ID", "8608906450")
+    _auth_token_env = os.environ.get("TELEGRAM_AUTH_BOT_TOKEN", "")
+    if (not _admin_token or "8628227561" in _admin_token or "8662117383" in _admin_token) and _auth_token_env:
+        os.environ["TELEGRAM_BOT_TOKEN"] = _auth_token_env
+    _admin_chat = os.environ.get("TELEGRAM_ADMIN_CHAT_ID", "")
+    if not _admin_chat or _admin_chat == "8608906450":
+        os.environ["TELEGRAM_ADMIN_CHAT_ID"] = "9224791176"
 
-    # Force updated Telegram Auth Bot credentials to override any stale Vercel dashboard variables
     _auth_user = os.environ.get("TELEGRAM_AUTH_BOT_USERNAME", "")
     if not _auth_user or "MedCare_Verify_Auth_bot" in _auth_user:
         os.environ["TELEGRAM_AUTH_BOT_USERNAME"] = "Medcare_Secure_Auth_bot"
 
     _auth_token = os.environ.get("TELEGRAM_AUTH_BOT_TOKEN", "")
-    if not _auth_token or "8630224222" in _auth_token:
-        os.environ["TELEGRAM_AUTH_BOT_TOKEN"] = "8910785925:AAHthVhUusbzj-xur5iN8glh-ud5bY20Kl4"
+    if (not _auth_token or "8910785925" in _auth_token or "8630224222" in _auth_token) and os.environ.get("TELEGRAM_BOT_TOKEN"):
+        os.environ["TELEGRAM_AUTH_BOT_TOKEN"] = os.environ["TELEGRAM_BOT_TOKEN"]
 
     chroma_dir = os.environ.get("CHROMA_PERSIST_DIR", "")
     if not chroma_dir or "/tmp" not in chroma_dir:

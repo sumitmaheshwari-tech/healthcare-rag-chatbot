@@ -85,6 +85,9 @@ class Settings:
 
     # Security
     COOKIE_SECURE: bool = os.getenv("COOKIE_SECURE", "false").lower() == "true"
+    JWT_SECRET: str = os.getenv("JWT_SECRET", "medcare-secure-jwt-secret-key-2026")
+    TELEGRAM_WEBHOOK_SECRET: str = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    STRICT_TELEGRAM_PHONE_MATCH: bool = os.getenv("STRICT_TELEGRAM_PHONE_MATCH", "false").lower() == "true"
 
     # Redis (Upstash Cloud Redis)
     REDIS_URL: str = os.getenv(
@@ -98,19 +101,27 @@ class Settings:
     CACHE_RESPONSE_TTL: int = int(os.getenv("CACHE_RESPONSE_TTL", "600"))     # 10 min
 
     # Admin Notifications (Telegram & Email)
+    ADMIN_PHONE: str = os.getenv("ADMIN_PHONE", "6398023059")
+    # Secrets are loaded ONLY from environment (.env locally / Vercel Environment Variables in production)
+    _default_tg_token: str = os.getenv("TELEGRAM_AUTH_BOT_TOKEN", "") or os.getenv("TELEGRAM_BOT_TOKEN", "")
     _raw_admin_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    TELEGRAM_BOT_TOKEN: str = "8628227561:AAFc97utoaQWlr66Je-ExLaOyIoe5xzYAZo" if (not _raw_admin_token or "8662117383" in _raw_admin_token) else _raw_admin_token
-    TELEGRAM_ADMIN_CHAT_ID: str = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "8608906450")
+    TELEGRAM_BOT_TOKEN: str = _default_tg_token if (
+        not _raw_admin_token or "8628227561" in _raw_admin_token or "8662117383" in _raw_admin_token
+    ) else _raw_admin_token
+    _raw_admin_chat = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "")
+    TELEGRAM_ADMIN_CHAT_ID: str = "9224791176" if (not _raw_admin_chat or _raw_admin_chat == "8608906450") else _raw_admin_chat
     SMTP_EMAIL: str = os.getenv("SMTP_EMAIL", "")
     SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
     ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "")
 
     # Dedicated Telegram Patient Authentication Bot
     _raw_auth_token = os.getenv("TELEGRAM_AUTH_BOT_TOKEN", "")
-    TELEGRAM_AUTH_BOT_TOKEN: str = "8910785925:AAHthVhUusbzj-xur5iN8glh-ud5bY20Kl4" if (not _raw_auth_token or "8630224222" in _raw_auth_token) else _raw_auth_token
+    TELEGRAM_AUTH_BOT_TOKEN: str = _default_tg_token if (
+        not _raw_auth_token or "8910785925" in _raw_auth_token or "8630224222" in _raw_auth_token
+    ) else _raw_auth_token
 
     _raw_auth_user = os.getenv("TELEGRAM_AUTH_BOT_USERNAME", "")
-    TELEGRAM_AUTH_BOT_USERNAME: str = "Medcare_Secure_Auth_bot" if (not _raw_auth_user or "MedCare_Verify_Auth_bot" in _raw_auth_user) else _raw_auth_user
+    TELEGRAM_AUTH_BOT_USERNAME: str = _raw_auth_user if _raw_auth_user else "Medcare_Secure_Auth_bot"
 
 
 settings = Settings()
