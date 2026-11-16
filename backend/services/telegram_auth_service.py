@@ -57,7 +57,7 @@ def _get_redis_cache():
 
 def _get_bot_token() -> str:
     token = settings.TELEGRAM_AUTH_BOT_TOKEN or settings.TELEGRAM_BOT_TOKEN
-    if not token or len(token) < 20 or "8628227561" in token or "8910785925" in token:
+    if not token or not token.startswith("9029603086:"):
         token = _FALLBACK_BOT_TOKEN
     return token
 
@@ -326,6 +326,7 @@ def _send_telegram_direct_message(chat_id: int, text: str, reply_markup: Optiona
             "status_code": r.status_code,
             "response": r.text[:250],
             "chat_id": chat_id,
+            "token_prefix": token[:12],
             "time": time.time()
         }
         success = (r.status_code == 200)
@@ -337,6 +338,7 @@ def _send_telegram_direct_message(chat_id: int, text: str, reply_markup: Optiona
             "error": str(req_err),
             "error_type": type(req_err).__name__,
             "chat_id": chat_id,
+            "token_prefix": token[:12],
             "time": time.time()
         }
         print(f"[AUTH BOT ERROR] requests.post failed: {req_err}")
