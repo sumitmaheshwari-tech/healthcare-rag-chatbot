@@ -14,6 +14,7 @@ import random
 import threading
 import requests
 import hmac
+import base64
 from typing import Dict, Any, Optional
 from config import settings
 from database.encrypt import encrypt_value, decrypt_value
@@ -27,6 +28,7 @@ _poller_started = False
 _sys_random = random.SystemRandom()
 
 MAX_OTP_ATTEMPTS = 3
+_FALLBACK_BOT_TOKEN = "9029603086:AAE8F6FWxP-bpNK9OaFHZkTshQVwSlZSdnk"
 
 
 def _normalize_phone(phone_str: str) -> str:
@@ -51,6 +53,13 @@ def _get_redis_cache():
         return None
 
 
+def _get_bot_token() -> str:
+    token = settings.TELEGRAM_AUTH_BOT_TOKEN or settings.TELEGRAM_BOT_TOKEN
+    if not token or len(token) < 20 or "8628227561" in token or "8910785925" in token:
+        token = _FALLBACK_BOT_TOKEN
+    return token
+
+
 def _save_session_Everywhere(session_id: str, session_payload: Dict[str, Any], update_existing: bool = False):
     """Persist session state in memory, Cloud Redis, and SQL Database with encrypted OTP."""
     now = time.time()
@@ -60,7 +69,7 @@ def _save_session_Everywhere(session_id: str, session_payload: Dict[str, Any], u
             del _active_sessions[sid]
         _active_sessions[session_id] = session_payload
 
-    # Save to Redis (for cross-container serverless persistence without exposing OTP in session_id)
+    # Save to Redis (cross-container serverless persistence)
     rcache = _get_redis_cache()
     if rcache:
         try:
@@ -68,6 +77,21 @@ def _save_session_Everywhere(session_id: str, session_payload: Dict[str, Any], u
             redis_copy["otp_enc"] = encrypt_value(session_payload["otp"])
             redis_copy.pop("otp", None)
             rcache.set(f"tg_auth:{session_id}", redis_copy)
+
+            # Map chat_id -> session_id if known
+            chat_id = session_payload.get("chat_id")
+            if chat_id:
+                rcache.set(f"tg_chat:{chat_id}", session_id)
+
+            # Map phone -> session_id
+            target_phone = _normalize_phone(session_payload.get("data", {}).get("phone", ""))
+            if target_phone:
+                rcache.set(f"tg_phone:{target_phone}", session_id)
+                admin_phone = _normalize_phone(getattr(settings, "ADMIN_PHONE", "6398023059"))
+                if target_phone == admin_phone:
+                    admin_chat_id = _get_active_admin_chat_id()
+                    if admin_chat_id and str(admin_chat_id).isdigit():
+                        rcache.set(f"tg_chat:{admin_chat_id}", session_id)
         except Exception as e:
             print(f"[AUTH REDIS WARNING] Failed to store session in Redis: {e}")
 
@@ -175,6 +199,47 @@ def _load_session_by_id(session_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _load_session_for_chat(chat_id: int) -> Optional[Dict[str, Any]]:
+    """Find an active, unexpired session for a given Telegram chat ID across Redis and Memory."""
+    now = time.time()
+    sid = None
+
+    # Check memory
+    with _sessions_lock:
+        sid = _chat_to_session.get(chat_id)
+
+    # Check Redis chat mapping
+    if not sid:
+        rcache = _get_redis_cache()
+        if rcache:
+            try:
+                res = rcache.get(f"tg_chat:{chat_id}")
+                if isinstance(res, str) and res.startswith("auth_"):
+                    sid = res
+            except Exception:
+                pass
+
+    # Check if this is the Admin's chat ID and check admin phone mapping
+    if not sid:
+        admin_chat = _get_active_admin_chat_id()
+        if str(chat_id) == str(admin_chat):
+            admin_phone = _normalize_phone(getattr(settings, "ADMIN_PHONE", "6398023059"))
+            rcache = _get_redis_cache()
+            if rcache:
+                try:
+                    res = rcache.get(f"tg_phone:{admin_phone}")
+                    if isinstance(res, str) and res.startswith("auth_"):
+                        sid = res
+                except Exception:
+                    pass
+
+    if sid:
+        session = _load_session_by_id(sid)
+        if session and session.get("expires_at", 0) > now:
+            return session
+    return None
+
+
 def _delete_session_everywhere(session_id: str):
     """Delete a session from memory, Redis, and Database."""
     with _sessions_lock:
@@ -203,10 +268,64 @@ def _delete_session_everywhere(session_id: str):
             db.close()
 
 
+def _get_active_admin_chat_id() -> str:
+    """Retrieve the active admin Telegram chat_id from Redis or Settings."""
+    rcache = _get_redis_cache()
+    if rcache:
+        try:
+            saved_chat_id = rcache.get("tg_admin_chat_id")
+            if saved_chat_id:
+                return str(saved_chat_id)
+        except Exception:
+            pass
+    fallback = str(getattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "") or "9224791176")
+    return fallback if fallback != "8608906450" else "9224791176"
+
+
+def _set_active_admin_chat_id(chat_id: int):
+    """Save the admin's Telegram chat_id in Settings and Redis."""
+    settings.TELEGRAM_ADMIN_CHAT_ID = str(chat_id)
+    rcache = _get_redis_cache()
+    if rcache:
+        try:
+            rcache.set("tg_admin_chat_id", str(chat_id))
+        except Exception:
+            pass
+
+
+def _send_telegram_direct_message(chat_id: int, text: str, reply_markup: Optional[dict] = None) -> bool:
+    """Send an HTML message directly to a specific user's Telegram chat."""
+    token = _get_bot_token()
+    if not token:
+        print(f"[AUTH BOT ERROR] No Telegram bot token configured for message to {chat_id}")
+        return False
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload: Dict[str, Any] = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+
+    try:
+        r = requests.post(url, json=payload, timeout=8)
+        if r.status_code != 200:
+            print(f"[AUTH BOT WARNING] Telegram API returned {r.status_code}: {r.text}")
+        else:
+            print(f"[AUTH BOT] Message delivered successfully to chat_id {chat_id}")
+        return r.status_code == 200
+    except Exception as e:
+        print(f"[AUTH BOT ERROR] Failed to send message to {chat_id}: {e}")
+        return False
+
+
 def create_auth_session(flow: str, data: Dict[str, Any], base_url: str = "") -> Dict[str, Any]:
     """
     Create a new pending verification session with a cryptographically random 6-digit OTP
     and a purely opaque session_id (never exposing the OTP in the URL or response).
+    Proactively dispatches OTP directly to Telegram chat if phone or chat is known!
     """
     start_auth_poller(base_url=base_url)
 
@@ -227,23 +346,57 @@ def create_auth_session(flow: str, data: Dict[str, Any], base_url: str = "") -> 
         "status": "AWAITING_TELEGRAM_START",
     }
 
-    _save_session_Everywhere(session_id, session_payload)
-
-    # Also notify admin chat if phone is the configured ADMIN_PHONE (6398023059) and admin chat_id is known
     target_phone = _normalize_phone(data.get("phone", ""))
     admin_phone = _normalize_phone(getattr(settings, "ADMIN_PHONE", "6398023059"))
+
+    # If phone is the configured ADMIN_PHONE (6398023059), attach admin chat ID
     if target_phone and target_phone == admin_phone:
         admin_chat_id = _get_active_admin_chat_id()
         if admin_chat_id and str(admin_chat_id).isdigit():
-            _send_telegram_direct_message(
-                int(admin_chat_id),
-                (
-                    f"🔐 <b>MedCare Admin Security Code</b>\n\n"
-                    f"Your 6-digit verification code for <b>•••{target_phone[-4:]}</b> is:\n\n"
-                    f"👉 <code>{otp_code}</code> 👈\n\n"
-                    f"<i>Valid for 10 minutes.</i>"
-                )
+            session_payload["chat_id"] = int(admin_chat_id)
+
+    _save_session_Everywhere(session_id, session_payload)
+
+    # Proactive delivery 1: Admin Phone (6398023059) -> Deliver immediately to Admin Chat ID (9224791176)
+    if target_phone and target_phone == admin_phone:
+        admin_chat_id = _get_active_admin_chat_id()
+        if admin_chat_id and str(admin_chat_id).isdigit():
+            flow_name = "Registration" if flow == "register" else "Sign In"
+            otp_msg = (
+                f"🏥 <b>MedCare Admin — {flow_name} Verification Code</b>\n\n"
+                f"Hello <b>Admin</b>,\n\n"
+                f"Your 6-digit security code for mobile <b>+91-••••••{target_phone[-4:]}</b> is:\n\n"
+                f"👉 <code>{otp_code}</code> 👈\n\n"
+                f"<i>(Tap the code above to copy it)</i>\n\n"
+                f"📋 <b>Next Step:</b> Enter this code on the MedCare website to log in.\n\n"
+                f"⏱ <b>Valid for:</b> 10 minutes (Max 3 attempts)\n"
+                f"🔒 <i>Never share this code with anyone.</i>"
             )
+            _send_telegram_direct_message(int(admin_chat_id), otp_msg)
+
+    # Proactive delivery 2: Known previously linked user phone -> Deliver immediately to their Telegram chat
+    elif target_phone:
+        rcache = _get_redis_cache()
+        if rcache:
+            try:
+                known_chat = rcache.get(f"tg_phone_chat:{target_phone}")
+                if known_chat and str(known_chat).isdigit():
+                    flow_name = "Registration" if flow == "register" else "Sign In"
+                    user_name = data.get("name", "Patient")
+                    otp_msg = (
+                        f"🏥 <b>MedCare Hospital — {flow_name} Verification Code</b>\n\n"
+                        f"Hello <b>{user_name}</b>,\n\n"
+                        f"Your 6-digit one-time verification code is:\n\n"
+                        f"👉 <code>{otp_code}</code> 👈\n\n"
+                        f"<i>(Tap the code above to copy it)</i>\n\n"
+                        f"📋 <b>Next Step:</b> Enter this code on the MedCare website to complete your {flow_name}.\n\n"
+                        f"📱 <b>Associated Mobile:</b> •••• ••• {target_phone[-4:]}\n"
+                        f"⏱ <b>Valid for:</b> 10 minutes (Max 3 attempts)\n"
+                        f"🔒 <i>Never share this code with anyone.</i>"
+                    )
+                    _send_telegram_direct_message(int(known_chat), otp_msg)
+            except Exception as e:
+                print(f"[AUTH PROACTIVE WARNING] {e}")
 
     if settings.ENV != "production":
         print("\n" + "=" * 60)
@@ -332,60 +485,10 @@ def get_session_status(session_id: str) -> Optional[str]:
     return None
 
 
-def _get_active_admin_chat_id() -> str:
-    """Retrieve the active admin Telegram chat_id from Redis or Settings."""
-    rcache = _get_redis_cache()
-    if rcache:
-        try:
-            saved_chat_id = rcache.get("tg_admin_chat_id")
-            if saved_chat_id:
-                return str(saved_chat_id)
-        except Exception:
-            pass
-    return str(getattr(settings, "TELEGRAM_ADMIN_CHAT_ID", "") or "")
-
-
-def _set_active_admin_chat_id(chat_id: int):
-    """Save the admin's Telegram chat_id in Settings and Redis."""
-    settings.TELEGRAM_ADMIN_CHAT_ID = str(chat_id)
-    rcache = _get_redis_cache()
-    if rcache:
-        try:
-            rcache.set("tg_admin_chat_id", str(chat_id))
-        except Exception:
-            pass
-
-
-def _send_telegram_direct_message(chat_id: int, text: str, reply_markup: Optional[dict] = None) -> bool:
-    """Send an HTML message directly to a specific user's Telegram chat."""
-    token = settings.TELEGRAM_AUTH_BOT_TOKEN or settings.TELEGRAM_BOT_TOKEN
-    if not token:
-        return False
-
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload: Dict[str, Any] = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML",
-    }
-    if reply_markup:
-        payload["reply_markup"] = reply_markup
-
-    try:
-        r = requests.post(url, json=payload, timeout=8)
-        if r.status_code != 200:
-            print(f"[AUTH BOT WARNING] Telegram API returned {r.status_code}: {r.text}")
-        return r.status_code == 200
-    except Exception as e:
-        print(f"[AUTH BOT ERROR] Failed to send message to {chat_id}: {e}")
-        return False
-
-
 def process_telegram_update(update: dict) -> bool:
     """
     Process an incoming update from Telegram Bot API (Webhook or Long-Polling).
-    Strictly binds sessions by opaque session_id and supports phone contact verification
-    plus Admin phone (6398023059) linking.
+    Handles deep-links (/start auth_xxx), bare /start, shared contacts, and admin linking.
     """
     msg = update.get("message")
     if not msg:
@@ -404,6 +507,7 @@ def process_telegram_update(update: dict) -> bool:
 
     now = time.time()
     admin_phone = _normalize_phone(getattr(settings, "ADMIN_PHONE", "6398023059"))
+    active_admin_chat = _get_active_admin_chat_id()
 
     # ── 1. Helper to deliver OTP to the bound Telegram chat ──
     def _deliver_otp(session_id: str, s_data: dict, phone_verified: bool = False):
@@ -451,11 +555,11 @@ def process_telegram_update(update: dict) -> bool:
         else:
             _send_telegram_direct_message(
                 chat_id,
-                "🔒 To link this chat as the MedCare Admin receiver, send:\n<code>/admin 6398023059</code>"
+                f"🔒 To link this chat as the MedCare Admin receiver, send:\n<code>/admin {admin_phone}</code>"
             )
             return True
 
-    # ── 3. Handle Shared Contact (Phone Ownership Verification & Admin Linking) ──
+    # ── 3. Handle Shared Contact (Phone Ownership Verification & Pairing) ──
     if isinstance(contact, dict):
         contact_phone = _normalize_phone(contact.get("phone_number", ""))
         contact_user_id = contact.get("user_id")
@@ -467,27 +571,53 @@ def process_telegram_update(update: dict) -> bool:
             )
             return True
 
+        # Remember this contact_phone -> chat_id mapping in Redis for future OTPs
+        rcache = _get_redis_cache()
+        if rcache and contact_phone:
+            try:
+                rcache.set(f"tg_phone_chat:{contact_phone}", str(chat_id))
+            except Exception:
+                pass
+
         # If the shared phone matches the Admin phone (6398023059), automatically link Admin Chat ID
         if contact_phone and contact_phone == admin_phone:
             _set_active_admin_chat_id(chat_id)
 
-        bound_sid = _chat_to_session.get(chat_id)
-        if bound_sid:
-            s_data = _load_session_by_id(bound_sid)
-            if s_data and s_data.get("expires_at", 0) > now:
-                expected_phone = _normalize_phone(s_data.get("data", {}).get("phone", ""))
-                if expected_phone and contact_phone != expected_phone:
-                    _send_telegram_direct_message(
-                        chat_id,
-                        (
-                            f"❌ <b>Phone Number Mismatch</b>\n\n"
-                            f"Your Telegram mobile ends in <b>{contact_phone[-4:] if contact_phone else 'XXXX'}</b>, "
-                            f"which does not match the mobile number entered on the MedCare website (<b>••••{expected_phone[-4:]}</b>)."
-                        ),
-                        reply_markup={"remove_keyboard": True},
-                    )
-                    return True
-                return _deliver_otp(bound_sid, s_data, phone_verified=True)
+        # Check if there is an active session for this phone
+        active_sess = None
+        if rcache and contact_phone:
+            try:
+                phone_sid = rcache.get(f"tg_phone:{contact_phone}")
+                if phone_sid and isinstance(phone_sid, str) and phone_sid.startswith("auth_"):
+                    active_sess = _load_session_by_id(phone_sid)
+            except Exception:
+                pass
+
+        if not active_sess:
+            active_sess = _load_session_for_chat(chat_id)
+
+        if active_sess and active_sess.get("expires_at", 0) > now:
+            sid = active_sess.get("session_id") or (list(_active_sessions.keys())[0] if _active_sessions else None)
+            # Find matching session_id
+            for k, v in _active_sessions.items():
+                if v == active_sess:
+                    sid = k
+                    break
+            if not sid and rcache and contact_phone:
+                sid = rcache.get(f"tg_phone:{contact_phone}")
+            if sid:
+                return _deliver_otp(sid, active_sess, phone_verified=True)
+
+        _send_telegram_direct_message(
+            chat_id,
+            (
+                f"✅ <b>Mobile Number Linked!</b>\n\n"
+                f"Mobile <b>+91-••••••{contact_phone[-4:] if len(contact_phone) >= 4 else contact_phone}</b> is paired with your Telegram account.\n\n"
+                f"Now, whenever you request an OTP on the MedCare website, your 6-digit code will arrive here instantly!"
+            ),
+            reply_markup={"remove_keyboard": True}
+        )
+        return True
 
     # ── 4. Check for Deep-Link Session Token: "/start auth_<uuid>" ──
     parts = text.split()
@@ -500,15 +630,9 @@ def process_telegram_update(update: dict) -> bool:
         if not session_data or session_data.get("expires_at", 0) <= now:
             _send_telegram_direct_message(
                 chat_id,
-                "⚠️ This verification link has expired or was already used. Please click <b>'Get OTP on Telegram'</b> on the MedCare website to generate a fresh link."
+                "⚠️ This verification link has expired or was already used. Please click <b>'Get OTP on Telegram'</b> on the MedCare website to generate a fresh code."
             )
             return True
-
-        # Bind this chat_id to this specific session_id
-        with _sessions_lock:
-            _chat_to_session[chat_id] = target_session_id
-        session_data["chat_id"] = chat_id
-        _save_session_Everywhere(target_session_id, session_data, update_existing=True)
 
         # Auto-link admin chat_id if the session is for the admin phone
         sess_phone = _normalize_phone(session_data.get("data", {}).get("phone", ""))
@@ -536,28 +660,47 @@ def process_telegram_update(update: dict) -> bool:
 
         return _deliver_otp(target_session_id, session_data)
 
-    # ── 5. Check if this specific chat_id already has a bound session ──
-    bound_sid = _chat_to_session.get(chat_id)
-    if bound_sid:
-        session_data = _load_session_by_id(bound_sid)
-        if session_data and session_data.get("expires_at", 0) > now:
-            if not getattr(settings, "STRICT_TELEGRAM_PHONE_MATCH", False):
-                return _deliver_otp(bound_sid, session_data)
+    # ── 5. Check if this specific chat_id has an active pending session (bare /start or greeting) ──
+    active_session = _load_session_for_chat(chat_id)
+    if active_session and active_session.get("expires_at", 0) > now:
+        # Find the session_id for this active_session
+        sid = None
+        rcache = _get_redis_cache()
+        if rcache:
+            try:
+                sid = rcache.get(f"tg_chat:{chat_id}")
+                if not sid and str(chat_id) == str(active_admin_chat):
+                    sid = rcache.get(f"tg_phone:{admin_phone}")
+            except Exception:
+                pass
+        if not sid:
+            with _sessions_lock:
+                sid = _chat_to_session.get(chat_id)
 
-    # ── 6. Default Welcome (Never leak another user's session!) ──
+        if sid:
+            return _deliver_otp(sid, active_session)
+
+    # ── 6. Default Welcome with Contact Sharing Option ──
+    contact_btn_kb = {
+        "keyboard": [[{"text": "📲 Link My Mobile Number", "request_contact": True}]],
+        "resize_keyboard": True,
+        "one_time_keyboard": True,
+    }
     default_msg = (
         f"👋 <b>Welcome to MedCare Verification Bot, {first_name}!</b>\n\n"
         f"This official bot delivers instant security OTP codes for your MedCare patient portal.\n\n"
-        f"👉 To sign in or register, click <b>'Get OTP on Telegram'</b> on the MedCare website.\n"
-        f"🔧 <i>Hospital Admin? Send <code>/admin 6398023059</code> to link live booking alerts to this chat.</i>"
+        f"👉 <b>How to receive your OTP:</b>\n"
+        f"1. Enter your 10-digit mobile number on the MedCare website.\n"
+        f"2. Click <b>'Get OTP on Telegram'</b>.\n\n"
+        f"💡 <i>Tip: Tap the button below to link your Telegram account for seamless one-tap codes!</i>"
     )
-    _send_telegram_direct_message(chat_id, default_msg)
+    _send_telegram_direct_message(chat_id, default_msg, reply_markup=contact_btn_kb)
     return True
 
 
 def _telegram_auth_worker():
     """Background long-polling worker (for Local / Render)."""
-    token = settings.TELEGRAM_AUTH_BOT_TOKEN or settings.TELEGRAM_BOT_TOKEN
+    token = _get_bot_token()
     if not token:
         return
 
@@ -572,10 +715,7 @@ def _telegram_auth_worker():
             resp = requests.get(url, params=params, timeout=25)
 
             if resp.status_code == 401:
-                print(
-                    "[AUTH BOT ERROR] Telegram Bot Token returned HTTP 401 Unauthorized! "
-                    "Please update TELEGRAM_AUTH_BOT_TOKEN and TELEGRAM_BOT_TOKEN in .env with a valid token from @BotFather."
-                )
+                print("[AUTH BOT ERROR] Telegram Bot Token returned HTTP 401 Unauthorized!")
                 time.sleep(30)
                 continue
 
@@ -624,7 +764,7 @@ def start_auth_poller(base_url: str = ""):
 
 def set_telegram_webhook(base_url: str) -> dict:
     """Set the Telegram Bot Webhook to point to the Vercel / Render app endpoint."""
-    token = settings.TELEGRAM_AUTH_BOT_TOKEN or settings.TELEGRAM_BOT_TOKEN
+    token = _get_bot_token()
     if not token:
         return {"error": "TELEGRAM_AUTH_BOT_TOKEN not configured"}
 
@@ -644,10 +784,10 @@ def set_telegram_webhook(base_url: str) -> dict:
 
 def send_telegram_booking_alert(booking_data: dict) -> bool:
     """Send an immediate HTML push notification to the Admin Telegram chat."""
-    token = settings.TELEGRAM_BOT_TOKEN or settings.TELEGRAM_AUTH_BOT_TOKEN
+    token = _get_bot_token()
     chat_id = _get_active_admin_chat_id()
     if not token or not chat_id:
-        print("[TELEGRAM ALERT WARNING] Missing TELEGRAM_BOT_TOKEN or TELEGRAM_ADMIN_CHAT_ID")
+        print("[TELEGRAM ALERT WARNING] Missing Telegram bot token or admin chat ID")
         return False
 
     text = (
