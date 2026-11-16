@@ -171,38 +171,73 @@ def create_tokens(patient_uid: str):
     return access_token, refresh_token
 
 
-def get_authenticated_patient_uid(request: Request) -> str | None:
-    """Retrieve verified patient UID from AccessToken cookie (or silent renew)."""
+def get_authenticated_patient_uid(request: Request, response: Optional[Response] = None) -> str | None:
+    """Retrieve verified patient UID from AccessToken cookie (or silent renew with cookie rotation)."""
     access_token = request.cookies.get("AccessToken")
-    
-    if not access_token:
-        # Check refresh token for silent renewal
-        refresh_token = request.cookies.get("RefreshToken")
-        if refresh_token:
-            try:
-                payload = jwt.decode(refresh_token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-                if payload.get("type") == "refresh":
-                    return payload.get("sub")
-            except Exception:
-                pass
-        return None
 
-    try:
-        payload = jwt.decode(access_token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        if payload.get("type") == "access":
-            return payload.get("sub")
-    except jwt.ExpiredSignatureError:
-        # Expired, try fallback to refresh
-        refresh_token = request.cookies.get("RefreshToken")
-        if refresh_token:
-            try:
-                payload = jwt.decode(refresh_token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-                if payload.get("type") == "refresh":
-                    return payload.get("sub")
-            except Exception:
-                pass
-    except Exception:
-        pass
+    if access_token:
+        try:
+            payload = jwt.decode(access_token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            if payload.get("type") == "access":
+                return payload.get("sub")
+        except jwt.ExpiredSignatureError:
+            pass
+        except Exception:
+            pass
+
+    # Fallback to RefreshToken for silent renewal
+    refresh_token = request.cookies.get("RefreshToken")
+    if refresh_token:
+        try:
+            payload = jwt.decode(refresh_token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            if payload.get("type") == "refresh":
+                sub = payload.get("sub")
+                if sub and response is not None:
+                    new_access, new_refresh = create_tokens(sub)
+                    set_jwt_cookies(response, new_access, new_refresh)
+                return sub
+        except Exception:
+            pass
+    return None
+
+
+def create_profile_selection_token(verified_phone: str) -> str:
+    """Create a short-lived signed JWT proving ownership of a verified mobile number for multi-profile selection."""
+    exp = datetime.utcnow() + timedelta(minutes=5)
+    payload = {"sub": verified_phone, "exp": exp, "type": "profile_select"}
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def set_profile_selection_cookie(response: Response, token: str):
+    """Set short-lived HttpOnly cookie authorizing selection of family profiles under the verified phone."""
+    response.set_cookie(
+        key="ProfileSelectionToken",
+        value=token,
+        httponly=True,
+        secure=settings.COOKIE_SECURE,
+        samesite="strict",
+        path="/",
+        max_age=300  # 5 minutes
+    )
+
+
+def get_verified_selection_phone(request: Request, db) -> Optional[str]:
+    """Extract the verified phone number from ProfileSelectionToken cookie (or active authenticated session)."""
+    sel_token = request.cookies.get("ProfileSelectionToken")
+    if sel_token:
+        try:
+            payload = jwt.decode(sel_token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            if payload.get("type") == "profile_select" and payload.get("sub"):
+                return normalize_phone_number(str(payload["sub"]))
+        except Exception:
+            pass
+
+    # Also allow switching between family profiles if already signed into a profile with that phone
+    auth_uid = get_authenticated_patient_uid(request)
+    if auth_uid:
+        current_pat = db.query(Patient).filter(Patient.id == auth_uid).first()
+        if current_pat and current_pat.phone:
+            return normalize_phone_number(decrypt_value(current_pat.phone))
     return None
 
 
@@ -233,9 +268,6 @@ def set_jwt_cookies(response: Response, access_token: str, refresh_token: str):
 class ChatRequest(BaseModel):
     message: str
     session_id: str = ""
-
-class SetSessionRequest(BaseModel):
-    patient_id: str
 
 
 class ChatResponse(BaseModel):
@@ -270,9 +302,9 @@ class TelegramAuthInitiateRequest(BaseModel):
     patient_uid: Optional[str] = ""
 
 
-
 class SelectProfileRequest(BaseModel):
     patient_uid: str
+
 
 class TelegramAuthVerifyRequest(BaseModel):
     auth_session_id: str
@@ -283,25 +315,7 @@ class TelegramAuthVerifyRequest(BaseModel):
     patient_uid: Optional[str] = ""
 
 
-
 # ── API routes ────────────────────────────────────────────────────────
-@app.post("/api/patients/set-session")
-async def set_session(req: SetSessionRequest, response: Response, req_raw: Request):
-    """Securely set JWT cookies for an authenticated patient."""
-    response.headers["Cache-Control"] = "no-store"
-    db = get_db()
-    try:
-        patient = db.query(Patient).filter(Patient.id == req.patient_id.strip()).first()
-        if not patient:
-            raise HTTPException(status_code=404, detail="Patient profile not found.")
-        
-        access_token, refresh_token = create_tokens(patient.id)
-        set_jwt_cookies(response, access_token, refresh_token)
-        return {"success": True, "message": "Session cookies set successfully."}
-    finally:
-        db.close()
-
-
 @app.post("/api/chat")
 async def chat(request: ChatRequest, req_raw: Request, response: Response):
     """Main conversational endpoint serving token-by-token streaming events."""
@@ -318,7 +332,8 @@ async def chat(request: ChatRequest, req_raw: Request, response: Response):
 
     session_id = request.session_id or str(uuid.uuid4())
     req_id = str(uuid.uuid4())
-    auth_uid = get_authenticated_patient_uid(req_raw)
+    auth_uid = get_authenticated_patient_uid(req_raw, response)
+    scoped_thread_id = f"{auth_uid or 'guest'}:{session_id}"
     
     log_audit_event(
         request_id=req_id,
@@ -332,7 +347,7 @@ async def chat(request: ChatRequest, req_raw: Request, response: Response):
 
     async def event_generator():
         config = {
-            "configurable": {"thread_id": session_id},
+            "configurable": {"thread_id": scoped_thread_id},
             "recursion_limit": 25
         }
         user_message = request.message
@@ -467,34 +482,6 @@ async def chat(request: ChatRequest, req_raw: Request, response: Response):
             if t_first_token is None:
                 yield f"data: {json.dumps({'type': 'content', 'text': 'I apologize, I was unable to generate a response. Please try rephrasing your question.'})}\n\n"
 
-            # ── Verify if login/registration succeeded ────────────────
-            state = await active_graph.aget_state(config)
-            verified_patient_id = ""
-            verified_patient_name = ""
-            import re
-
-            for msg in reversed(state.values.get("messages", [])):
-                content_str = str(msg.content)
-                m_verify = re.search(r"Verification successful for patient (.*?) \(ID: (pat-\w+-\w+-\w+-\w+-\w+|pat-\w+)\)", content_str)
-                if m_verify:
-                    verified_patient_id = m_verify.group(2)
-                    verified_patient_name = m_verify.group(1)
-                    break
-                m_register = re.search(r"Patient ID:\*\* (pat-\w+-\w+-\w+-\w+-\w+|pat-\w+)", content_str)
-                if m_register:
-                    verified_patient_id = m_register.group(1)
-                    db_session = get_db()
-                    try:
-                        db_p = db_session.query(Patient).filter(Patient.id == verified_patient_id).first()
-                        if db_p:
-                            verified_patient_name = db_p.name
-                    finally:
-                        db_session.close()
-                    break
-
-            if verified_patient_id:
-                yield f"data: {json.dumps({'type': 'auth', 'patient_id': verified_patient_id, 'patient_name': verified_patient_name})}\n\n"
-
             total_ms = (time.perf_counter() - t_request_start) * 1000
             print(f"[PERF] Total stream duration: {total_ms:.0f}ms")
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
@@ -579,16 +566,38 @@ async def login_patient(req: LoginRequest, req_raw: Request, response: Response)
 
 @app.post("/api/patients/select-profile")
 async def select_patient_profile(req: SelectProfileRequest, response: Response, req_raw: Request):
-    """Issue secure session cookies for a chosen family profile after phone verification."""
+    """Issue secure session cookies for a chosen family profile ONLY after verified phone ownership."""
     response.headers["Cache-Control"] = "no-store"
     db = get_db()
     try:
+        verified_phone = get_verified_selection_phone(req_raw, db)
+        if not verified_phone:
+            raise HTTPException(
+                status_code=401,
+                detail="Phone verification required before selecting a family profile. Please verify your OTP first."
+            )
+
         patient = db.query(Patient).filter(Patient.id == req.patient_uid.strip()).first()
         if not patient:
             raise HTTPException(status_code=404, detail="Selected profile not found.")
 
+        raw_pat_phone = normalize_phone_number(patient.phone or "")
+        dec_pat_phone = normalize_phone_number(decrypt_value(patient.phone) if patient.phone else "")
+        if verified_phone not in (raw_pat_phone, dec_pat_phone):
+            log_audit_event(
+                request_id=str(uuid.uuid4()),
+                action="SELECT_PROFILE",
+                status="FAILED",
+                patient_uid=patient.id,
+                ip_address=req_raw.client.host,
+                user_agent=req_raw.headers.get("User-Agent"),
+                details=f"Unauthorized attempt to select profile {patient.id} from phone {verified_phone}."
+            )
+            raise HTTPException(status_code=403, detail="Unauthorized to access this patient profile.")
+
         access_token, refresh_token = create_tokens(patient.id)
         set_jwt_cookies(response, access_token, refresh_token)
+        response.delete_cookie(key="ProfileSelectionToken", path="/")
 
         log_audit_event(
             request_id=str(uuid.uuid4()),
@@ -613,7 +622,15 @@ async def select_patient_profile(req: SelectProfileRequest, response: Response, 
 async def initiate_telegram_auth(req: TelegramAuthInitiateRequest, req_raw: Request):
     """Initiate a Telegram OTP authentication session for @Medcare_Secure_Auth_bot."""
     from services.telegram_auth_service import create_auth_session
-    
+
+    ip_addr = req_raw.client.host if req_raw.client else "unknown"
+    ip_remaining = check_ip_lockout(ip_addr)
+    if ip_remaining:
+        raise HTTPException(
+            status_code=423,
+            detail=f"Too many failed verification attempts from this IP. Try again in {int(ip_remaining // 60) + 1} minutes."
+        )
+
     db = get_db()
     try:
         target_phone = normalize_phone_number(req.phone or req.patient_uid or "")
@@ -636,19 +653,40 @@ async def initiate_telegram_auth(req: TelegramAuthInitiateRequest, req_raw: Requ
             except Exception as dbe:
                 print(f"[AUTH LOGIN DB WARNING] {dbe}")
 
+            # Auto-create admin profile if admin phone (6398023059) initiates login on a fresh DB
+            admin_phone = normalize_phone_number(getattr(settings, "ADMIN_PHONE", "6398023059"))
+            if not patient and target_phone == admin_phone:
+                try:
+                    from database.setup import _ensure_admin_patient
+                    _ensure_admin_patient(db)
+                    patient = find_patient_in_db(db, "pat-admin-uuid", target_phone)
+                except Exception:
+                    pass
+
             if not patient:
                 raise HTTPException(
                     status_code=404,
                     detail="No patient profile found with this mobile number. Click 'Register profile here' to create your account in 10 seconds!"
                 )
 
-            session_info = create_auth_session(flow="login", data={
-                "patient_uid": req.patient_uid.strip() if req.patient_uid else "",
-                "phone": target_phone,
-                "dob": req.dob or ""
-            })
+            acc_remaining = check_account_lockout(patient)
+            if acc_remaining:
+                raise HTTPException(
+                    status_code=423,
+                    detail=f"This account is temporarily locked due to failed attempts. Try again in {int(acc_remaining.total_seconds() // 60) + 1} minutes."
+                )
+
+            session_info = create_auth_session(
+                flow="login",
+                data={
+                    "patient_uid": req.patient_uid.strip() if req.patient_uid else "",
+                    "phone": target_phone,
+                    "dob": req.dob or ""
+                },
+                base_url=str(req_raw.base_url).rstrip("/")
+            )
             return {"success": True, **session_info}
-        
+
         elif req.flow == "register":
             clean_name = req.name.strip()
             if not clean_name:
@@ -666,13 +704,17 @@ async def initiate_telegram_auth(req: TelegramAuthInitiateRequest, req_raw: Requ
             except Exception as dbe:
                 print(f"[AUTH REG DB WARNING] {dbe}")
 
-            session_info = create_auth_session(flow="register", data={
-                "name": clean_name,
-                "dob": req.dob.strip() if req.dob else "",
-                "phone": target_phone,
-                "is_existing": exact_match is not None,
-                "existing_uid": exact_match.id if exact_match else ""
-            })
+            session_info = create_auth_session(
+                flow="register",
+                data={
+                    "name": clean_name,
+                    "dob": req.dob.strip() if req.dob else "",
+                    "phone": target_phone,
+                    "is_existing": exact_match is not None,
+                    "existing_uid": exact_match.id if exact_match else ""
+                },
+                base_url=str(req_raw.base_url).rstrip("/")
+            )
             return {"success": True, **session_info}
         else:
             raise HTTPException(status_code=400, detail="Invalid auth flow requested.")
@@ -682,17 +724,42 @@ async def initiate_telegram_auth(req: TelegramAuthInitiateRequest, req_raw: Requ
 
 @app.post("/api/auth/telegram/verify")
 async def verify_telegram_auth(req: TelegramAuthVerifyRequest, req_raw: Request, response: Response):
-    """Verify 6-digit Telegram OTP & support Multi-Profile Family Selection."""
+    """Verify 6-digit Telegram OTP with IP lockout, 3-attempt limit, and secure Multi-Profile Family Selection."""
     from services.telegram_auth_service import verify_session_otp
-    
+
+    req_id = str(uuid.uuid4())
+    ip_addr = req_raw.client.host if req_raw.client else "unknown"
+
+    # 1. Enforce IP Brute-Force Lockout
+    ip_remaining = check_ip_lockout(ip_addr)
+    if ip_remaining:
+        raise HTTPException(
+            status_code=423,
+            detail=f"Too many failed verification attempts from this location. Temporarily locked. Try again in {int(ip_remaining // 60) + 1} minutes."
+        )
+
+    # 2. Verify Session OTP (strictly bound to req.auth_session_id, max 3 attempts)
     result = verify_session_otp(req.auth_session_id, req.otp)
-    if not result:
-        raise HTTPException(status_code=400, detail="Invalid or expired verification code. Please tap START on @Medcare_Secure_Auth_bot to get your code.")
+    if not result or not result.get("success"):
+        increment_ip_failed_attempt(ip_addr)
+        err_msg = (result or {}).get("error") or "Invalid or expired verification code. Please tap START on @Medcare_Secure_Auth_bot to get your code."
+        log_audit_event(
+            request_id=req_id,
+            action="VERIFY_TELEGRAM_OTP",
+            status="FAILED",
+            patient_uid=req.patient_uid or None,
+            ip_address=ip_addr,
+            user_agent=req_raw.headers.get("User-Agent"),
+            details=f"Telegram OTP verification failed for session {req.auth_session_id}: {err_msg}"
+        )
+        raise HTTPException(status_code=400, detail=err_msg)
+
+    # 3. Valid OTP — clear IP lockout counters
+    clear_ip_attempts(ip_addr)
 
     flow = result["flow"]
     p_data = result.get("data", {})
-    req_id = str(uuid.uuid4())
-    ip_addr = req_raw.client.host
+    # Trust phone from the server-side verified session payload first
     verified_phone = normalize_phone_number(p_data.get("phone", "") or req.phone or "")
 
     db = get_db()
@@ -740,6 +807,7 @@ async def verify_telegram_auth(req: TelegramAuthVerifyRequest, req_raw: Request,
                 db.add(patient)
                 db.commit()
 
+            clear_account_attempts(db, patient)
             access_token, refresh_token = create_tokens(patient.id)
             set_jwt_cookies(response, access_token, refresh_token)
 
@@ -762,13 +830,13 @@ async def verify_telegram_auth(req: TelegramAuthVerifyRequest, req_raw: Request,
 
         # ── SIGN IN FLOW (With Multi-Profile Family Support) ────────────
         elif flow == "login":
-            target_phone = verified_phone or normalize_phone_number(req.phone or req.patient_uid or "")
-            target_uid = (p_data.get("patient_uid") or req.patient_uid or "").strip().lower()
+            target_phone = verified_phone
+            target_uid = (p_data.get("patient_uid") or "").strip().lower()
 
             all_patients = db.query(Patient).all()
             matching_patients = []
             
-            # Find all profiles belonging to this phone number or patient UID
+            # Find all profiles belonging to this verified phone number (or specific UID matching that phone)
             for p in all_patients:
                 raw_phone = normalize_phone_number(p.phone or "")
                 ep_phone = normalize_phone_number(decrypt_value(p.phone) if p.phone else "")
@@ -776,33 +844,17 @@ async def verify_telegram_auth(req: TelegramAuthVerifyRequest, req_raw: Request,
                     if p not in matching_patients:
                         matching_patients.append(p)
                 elif target_uid and (p.id.lower() == target_uid or p.id.lower().replace("pat-", "") == target_uid.replace("pat-", "")):
-                    if p not in matching_patients:
-                        matching_patients.append(p)
-
-            if not matching_patients and target_phone:
-                # If stateless or fresh container, create a quick profile for this phone so login doesn't block
-                patient = Patient(
-                    id=f"pat-{uuid.uuid4().hex[:12]}",
-                    name="Patient",
-                    dob=encrypt_value(""),
-                    age=30,
-                    gender="Unknown",
-                    phone=encrypt_value(target_phone),
-                    email=encrypt_value(""),
-                    address=encrypt_value(""),
-                    blood_group=encrypt_value(""),
-                    emergency_contact=encrypt_value("")
-                )
-                db.add(patient)
-                db.commit()
-                matching_patients = [patient]
+                    if not target_phone or ep_phone == target_phone or raw_phone == target_phone:
+                        if p not in matching_patients:
+                            matching_patients.append(p)
 
             if not matching_patients:
                 raise HTTPException(status_code=404, detail="No patient profile found for this mobile number.")
 
-            # If only 1 profile or specific UID requested: Log in directly
+            # If only 1 profile: Log in directly
             if len(matching_patients) == 1:
                 patient = matching_patients[0]
+                clear_account_attempts(db, patient)
                 access_token, refresh_token = create_tokens(patient.id)
                 set_jwt_cookies(response, access_token, refresh_token)
 
@@ -823,7 +875,10 @@ async def verify_telegram_auth(req: TelegramAuthVerifyRequest, req_raw: Request,
                     "name": patient.name
                 }
 
-            # Multiple family profiles exist on this phone: Return profile options
+            # Multiple family profiles exist on this phone: Issue signed ProfileSelectionToken cookie
+            sel_token = create_profile_selection_token(target_phone)
+            set_profile_selection_cookie(response, sel_token)
+
             profiles = []
             for p in matching_patients:
                 dec_dob = decrypt_value(p.dob) if p.dob else ""
@@ -837,17 +892,23 @@ async def verify_telegram_auth(req: TelegramAuthVerifyRequest, req_raw: Request,
             return {
                 "success": True,
                 "multiple_profiles": True,
-                "phone": verified_phone,
+                "phone": target_phone,
                 "profiles": profiles
             }
     finally:
         db.close()
 
 
-
 @app.post("/api/telegram/auth-webhook")
 async def telegram_auth_webhook(req: Request):
     """Receive incoming Telegram Bot API updates via Webhook (Optimized for Serverless / Vercel)."""
+    import hmac as _hmac
+    expected_secret = getattr(settings, "TELEGRAM_WEBHOOK_SECRET", "")
+    if expected_secret:
+        provided_secret = req.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if not _hmac.compare_digest(expected_secret, provided_secret):
+            raise HTTPException(status_code=403, detail="Invalid Telegram webhook secret token.")
+
     from services.telegram_auth_service import process_telegram_update
     try:
         data = await req.json()
@@ -861,9 +922,9 @@ async def telegram_auth_webhook(req: Request):
 @app.get("/api/telegram/setup-webhook")
 async def setup_telegram_webhook_route(request: Request, key: Optional[str] = None):
     """One-click setup endpoint to register the Telegram Webhook with Telegram servers."""
-    admin_secret = os.getenv("JWT_SECRET", "medcare-admin")
-    if key != admin_secret and key != "medcare":
-        raise HTTPException(status_code=403, detail="Unauthorized. Provide ?key=medcare")
+    admin_secret = os.getenv("JWT_SECRET", "")
+    if not admin_secret or key != admin_secret:
+        raise HTTPException(status_code=403, detail="Unauthorized. Provide valid admin key: ?key=<JWT_SECRET>")
     
     from services.telegram_auth_service import set_telegram_webhook
     base_url = str(request.base_url).rstrip("/")
@@ -965,6 +1026,7 @@ async def logout_patient(response: Response, req_raw: Request):
 
     response.delete_cookie(key="AccessToken", path="/")
     response.delete_cookie(key="RefreshToken", path="/")
+    response.delete_cookie(key="ProfileSelectionToken", path="/")
     return {"success": True, "message": "Logged out successfully"}
 
 
@@ -972,7 +1034,7 @@ async def logout_patient(response: Response, req_raw: Request):
 async def get_current_patient_profile(request: Request, response: Response):
     """Retrieve details of the currently authenticated patient."""
     response.headers["Cache-Control"] = "no-store"
-    patient_uid = get_authenticated_patient_uid(request)
+    patient_uid = get_authenticated_patient_uid(request, response)
     
     if not patient_uid:
         raise HTTPException(status_code=401, detail="Not authenticated.")
@@ -1098,8 +1160,8 @@ async def prewarm_chat(req: PrewarmRequest, background_tasks: BackgroundTasks):
 @app.get("/api/admin/download-db")
 async def download_database_file(key: Optional[str] = None):
     """Download the live production SQLite hospital.db database file."""
-    admin_secret = os.getenv("JWT_SECRET", "medcare-admin")
-    if key != admin_secret and key != "medcare":
+    admin_secret = os.getenv("JWT_SECRET", "")
+    if not admin_secret or key != admin_secret:
         raise HTTPException(status_code=403, detail="Unauthorized. Provide valid admin key.")
     
     db_path = BACKEND_DIR / "hospital.db"
@@ -1125,8 +1187,8 @@ async def get_admin_live_data(key: Optional[str] = None, response: Response = No
     if response:
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
     
-    admin_secret = os.getenv("JWT_SECRET", "medcare-admin")
-    if key != admin_secret and key != "medcare":
+    admin_secret = os.getenv("JWT_SECRET", "")
+    if not admin_secret or key != admin_secret:
         raise HTTPException(status_code=403, detail="Unauthorized. Provide valid admin key.")
 
     db = get_db()
@@ -1163,11 +1225,12 @@ async def get_admin_live_data(key: Optional[str] = None, response: Response = No
             doc_name = doc.name if doc else (a.doctor.name if a.doctor else f"Doctor #{a.doctor_id}")
             status = a.status.value if hasattr(a.status, "value") else str(a.status)
             
+            clean_doc_name = doc_name if doc_name.startswith("Dr. ") else f"Dr. {doc_name}"
             appointments_list.append({
                 "uid": a.appointment_uid,
                 "patient_name": pat_name,
                 "patient_id": a.patient_id,
-                "doctor_name": f"Dr. {doc_name}",
+                "doctor_name": clean_doc_name,
                 "date": str(a.date),
                 "time": str(a.time),
                 "status": status,
@@ -1220,11 +1283,11 @@ async def get_admin_live_data(key: Optional[str] = None, response: Response = No
 @app.get("/api/admin/dashboard", response_class=HTMLResponse)
 async def admin_database_dashboard(key: Optional[str] = None):
     """View the live cloud database snapshot with automated real-time 3-second live sync."""
-    admin_secret = os.getenv("JWT_SECRET", "medcare-admin")
-    if key != admin_secret and key != "medcare":
+    admin_secret = os.getenv("JWT_SECRET", "")
+    if not admin_secret or key != admin_secret:
         return HTMLResponse(
             "<h3>🔒 Admin Access Required</h3>"
-            "<p>Please provide the admin key in the URL: <code>?key=medcare</code> or your <code>JWT_SECRET</code></p>",
+            "<p>Please provide the valid admin key in the URL: <code>?key=&lt;JWT_SECRET&gt;</code></p>",
             status_code=403
         )
 
@@ -1463,6 +1526,11 @@ async def admin_database_dashboard(key: Optional[str] = None):
 
     <script>
         let cachedData = null;
+        function esc(str) {
+            return String(str == null ? '' : str).replace(/[&<>"']/g, m => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            })[m]);
+        }
 
         async function fetchLiveData(manual = false) {
             try {
@@ -1507,15 +1575,15 @@ async def admin_database_dashboard(key: Optional[str] = None):
             }
 
             tbody.innerHTML = filtered.map(a => {
-                const st = (a.status || 'booked').toLowerCase();
+                const st = esc((a.status || 'booked').toLowerCase());
                 const badgeClass = st === 'booked' ? 'badge-booked' : (st === 'completed' ? 'badge-completed' : 'badge-pending');
                 return `<tr>
-                    <td><code>${a.uid}</code></td>
-                    <td><b>${a.patient_name}</b> <small style="color:var(--text-muted)">(${a.patient_id})</small></td>
-                    <td>${a.doctor_name}</td>
-                    <td>${a.date} @ <b>${a.time}</b></td>
+                    <td><code>${esc(a.uid)}</code></td>
+                    <td><b>${esc(a.patient_name)}</b> <small style="color:var(--text-muted)">(${esc(a.patient_id)})</small></td>
+                    <td>${esc(a.doctor_name)}</td>
+                    <td>${esc(a.date)} @ <b>${esc(a.time)}</b></td>
                     <td><span class="badge ${badgeClass}">${st}</span></td>
-                    <td>${a.reason}</td>
+                    <td>${esc(a.reason)}</td>
                 </tr>`;
             }).join('');
         }
@@ -1536,11 +1604,11 @@ async def admin_database_dashboard(key: Optional[str] = None):
             }
 
             tbody.innerHTML = filtered.map(p => `<tr>
-                <td><code>${p.id}</code></td>
-                <td><b>${p.name}</b></td>
-                <td>${p.dob}</td>
-                <td><b>${p.phone}</b></td>
-                <td style="color:var(--text-muted)">${p.created_at}</td>
+                <td><code>${esc(p.id)}</code></td>
+                <td><b>${esc(p.name)}</b></td>
+                <td>${esc(p.dob)}</td>
+                <td><b>${esc(p.phone)}</b></td>
+                <td style="color:var(--text-muted)">${esc(p.created_at)}</td>
             </tr>`).join('');
         }
 
@@ -1552,13 +1620,13 @@ async def admin_database_dashboard(key: Optional[str] = None):
                 return;
             }
             tbody.innerHTML = cachedData.bills.map(b => {
-                const st = (b.status || 'pending').toLowerCase();
+                const st = esc((b.status || 'pending').toLowerCase());
                 const badgeClass = st === 'paid' ? 'badge-booked' : 'badge-pending';
                 return `<tr>
-                    <td><code>${b.bill_number}</code></td>
-                    <td><b>${b.patient_name}</b></td>
-                    <td><b>₹${b.amount}</b></td>
-                    <td>₹${b.paid}</td>
+                    <td><code>${esc(b.bill_number)}</code></td>
+                    <td><b>${esc(b.patient_name)}</b></td>
+                    <td><b>₹${esc(b.amount)}</b></td>
+                    <td>₹${esc(b.paid)}</td>
                     <td><span class="badge ${badgeClass}">${st}</span></td>
                 </tr>`;
             }).join('');
@@ -1572,11 +1640,11 @@ async def admin_database_dashboard(key: Optional[str] = None):
                 return;
             }
             tbody.innerHTML = cachedData.audits.map(l => `<tr>
-                <td>${l.time}</td>
-                <td><b>${l.action}</b></td>
-                <td><span class="badge badge-booked">${l.status}</span></td>
-                <td><code>${l.patient_uid}</code></td>
-                <td style="color:var(--text-muted)">${l.ip}</td>
+                <td>${esc(l.time)}</td>
+                <td><b>${esc(l.action)}</b></td>
+                <td><span class="badge badge-booked">${esc(l.status)}</span></td>
+                <td><code>${esc(l.patient_uid)}</code></td>
+                <td style="color:var(--text-muted)">${esc(l.ip)}</td>
             </tr>`).join('');
         }
 
